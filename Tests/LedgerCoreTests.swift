@@ -123,7 +123,7 @@ final class AcceptanceTests: XCTestCase {
         s.accounts[0].archived = true; XCTAssertThrowsError(try s.validate())
     }
     func testDebtTargetBalanceEntryParsing() throws {
-        XCTAssertEqual(try Money.parse("0", signed: false), 0)
+        XCTAssertEqual(try Money.parse("0", signed: false, allowZero: true), 0)
         XCTAssertEqual(try Money.parse("100.01", signed: false), 10_001)
         XCTAssertThrowsError(try Money.parse("-100", signed: false))
     }

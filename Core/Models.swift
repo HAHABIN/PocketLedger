@@ -8,7 +8,7 @@ public enum LedgerError: LocalizedError {
 public enum Money {
     // 限制单笔金额，确保累计计算不会溢出并拒绝异常备份金额。
     public static let limit: Int64 = 1_000_000_000_000
-    public static func parse(_ text: String, signed: Bool = false) throws -> Int64 {
+    public static func parse(_ text: String, signed: Bool = false, allowZero: Bool = false) throws -> Int64 {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let pattern = signed ? #"^-?\d{1,10}(\.\d{1,2})?$"# : #"^\d{1,10}(\.\d{1,2})?$"#
         guard value.range(of: pattern, options: .regularExpression) != nil,
@@ -16,7 +16,7 @@ public enum Money {
             throw LedgerError.invalid("请输入最多两位小数的金额")
         }
         let result = NSDecimalNumber(decimal: decimal * 100).int64Value
-        guard abs(result) <= limit, signed || result > 0 else { throw LedgerError.invalid("金额必须大于零且不超过100亿元") }
+        guard abs(result) <= limit, signed || result > 0 || (allowZero && result == 0) else { throw LedgerError.invalid("金额必须大于零且不超过100亿元") }
         return result
     }
     public static func format(_ cents: Int64) -> String {

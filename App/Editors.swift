@@ -182,7 +182,7 @@ struct AccountDetail: View {
                     TextField("校正原因", text: $reason)
                     DatePicker("校正日期", selection: $date)
                     Button("生成校正记录") { Task { await store.attemptAsync {
-                        let value = try Money.parse(adjustment, signed: !account.kind.isDebt)
+                        let value = try Money.parse(adjustment, signed: !account.kind.isDebt, allowZero: true)
                         if await store.perform({ try BookkeepingService.adjust(accountID: id, target: account.kind.isDebt ? -value : value, reason: reason, date: date, state: &$0) }) { adjustment = ""; reason = "" }
                     } } }
                 }
