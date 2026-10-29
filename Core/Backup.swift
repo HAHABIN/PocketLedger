@@ -57,6 +57,15 @@ public enum BackupService {
         guard ["json", "pocketledger"].contains(url.pathExtension.lowercased()) else { throw LedgerError.invalid("请选择 JSON 或 pocketledger 完整备份；CSV 不能用于恢复") }
         let granted = url.startAccessingSecurityScopedResource()
         defer { if granted { url.stopAccessingSecurityScopedResource() } }
+        var coordinationError: NSError?
+        var result: Result<Backup, Error>?
+        NSFileCoordinator().coordinate(readingItemAt: url, options: .withoutChanges, error: &coordinationError) { coordinatedURL in
+            result = Result { try readCoordinatedFile(coordinatedURL) }
+        }
+        if let result { return try result.get() }
+        throw coordinationError ?? NSError(domain: "PocketLedger.Backup", code: 1, userInfo: [NSLocalizedDescriptionKey: "文件尚未准备好，请在「文件」中下载后重试"])
+    }
+    private static func readCoordinatedFile(_ url: URL) throws -> Backup {
         let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
         guard values.isRegularFile == true, (values.fileSize ?? 0) <= maximumFileSize else { throw LedgerError.invalid("备份不是普通文件或超过50MB") }
         let handle = try FileHandle(forReadingFrom: url)
