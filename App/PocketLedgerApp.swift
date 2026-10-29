@@ -19,7 +19,7 @@ extension Color {
             }.tint(.brand)
         }
     }
-    private func open() {
+    @MainActor private func open() {
         #if DEBUG
         // 自动化截图仅使用内存样例，不写入用户数据库。
         if ProcessInfo.processInfo.arguments.contains("--界面预览") { store = Store.preview; return }
