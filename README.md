@@ -2,6 +2,16 @@
 
 完全离线的 iPhone 记账应用。SwiftUI、Swift Charts、SQLite + GRDB，无账号、无服务器、无广告或统计 SDK。
 
+## UI 设计参考
+
+![轻松记账完整 UI 设计参考](docs/images/ui-reference.jpg)
+
+[查看完整设计图](docs/images/ui-reference.jpg)
+
+这张图是产品视觉与布局参考，不是当前 App 的运行截图。当前实现已采用珊瑚橙主色、首页/报表/资产/账本四个页面、独立加号记账入口、分类网格及收支图表；尚未完成逐屏视觉还原，渐变汇总卡、账户卡片、间距和细节样式仍需继续对照完善。
+
+以完整需求文档为准：底栏采用四个 Tab 加独立记账按钮；图中的「我的」、会员、共享及小程序内容不属于当前离线 iOS 版本。设置从首页右上角进入。
+
 ## 运行
 
 - 最低 iOS 17，使用带有 iOS 17 或更新 SDK 的 Xcode 打开 `PocketLedger.xcodeproj`。
