@@ -54,9 +54,12 @@ struct RootView: View {
                 case 4: NavigationStack { SettingsView() }
                 default: NavigationStack { HomeView() }
                 }
-            }.safeAreaInset(edge: .top, spacing: 0) {
-                if store.isDemonstration { Text("演示数据 · 全部虚构").font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 4).background(Color.brand.opacity(0.07)) }
-            }.safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
+            }.safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    if store.isDemonstration { Text("演示数据 · 全部虚构").font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 4).background(Color(uiColor: .systemBackground)) }
+                    bottomBar
+                }
+            }
             .sheet(isPresented: $add) { EntryEditor() }
             .sheet(isPresented: Binding(get: { !onboarded && !ProcessInfo.processInfo.arguments.contains("--界面预览") }, set: { if !$0 { onboarded = true } })) { onboarding }
             .alert("操作提示", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) { Button("知道了") { store.error = nil } } message: { Text(store.error ?? "") }
