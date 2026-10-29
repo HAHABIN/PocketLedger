@@ -2,6 +2,18 @@
 
 完全离线的 iPhone 记账应用。SwiftUI、Swift Charts、SQLite + GRDB，无账号、无服务器、无广告或统计 SDK。
 
+## 实际运行界面
+
+以下为本版在 iPhone 模拟器上的实际运行截图，使用内存示例数据，不写入正式账本。已按下方设计稿调整主要卡片、配色、图标及排版。
+
+| 首页 | 记一笔 | 报表 |
+| --- | --- | --- |
+| ![首页](docs/screenshots/home.png) | ![记一笔](docs/screenshots/entry.png) | ![报表](docs/screenshots/reports.png) |
+
+| 资产 | 账本 |
+| --- | --- |
+| ![资产](docs/screenshots/assets.png) | ![账本](docs/screenshots/books.png) |
+
 ## UI 设计参考
 
 ![轻松记账完整 UI 设计参考](docs/images/ui-reference.jpg)
