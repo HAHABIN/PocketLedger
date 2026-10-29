@@ -10,13 +10,21 @@ extension Color {
 @main struct PocketLedgerApp: App {
     @State private var store: Store?
     @State private var failure: String?
+    @State private var receivedBackupURL: URL?
     var body: some Scene {
         WindowGroup {
             Group {
-                if let store { RootView().environmentObject(store) }
+                if let store {
+                    RootView().environmentObject(store).task(id: receivedBackupURL) {
+                        if let url = receivedBackupURL { await store.stageBackup(url); receivedBackupURL = nil }
+                    }
+                }
                 else if let failure { VStack(spacing: 20) { Image(systemName: "externaldrive.badge.exclamationmark").font(.largeTitle); Text("无法打开本地数据库").font(.headline); Text(failure); Button("重试", action: open) }.padding() }
                 else { ProgressView("打开账本…").onAppear(perform: open) }
-            }.tint(.brand)
+            }.tint(.brand).onOpenURL { url in
+                // 包括冷启动收到的文件，等数据库就绪后再校验，绝不直接覆盖。
+                receivedBackupURL = url
+            }
         }
     }
     @MainActor private func open() {
@@ -43,12 +51,20 @@ struct RootView: View {
                 case 1: NavigationStack { ReportsView() }
                 case 2: NavigationStack { AssetsView() }
                 case 3: NavigationStack { BooksView() }
+                case 4: NavigationStack { SettingsView() }
                 default: NavigationStack { HomeView() }
                 }
+            }.safeAreaInset(edge: .top, spacing: 0) {
+                if store.isDemonstration { Text("演示数据 · 全部虚构").font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 4).background(Color.brand.opacity(0.07)) }
             }.safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
             .sheet(isPresented: $add) { EntryEditor() }
             .sheet(isPresented: Binding(get: { !onboarded && !ProcessInfo.processInfo.arguments.contains("--界面预览") }, set: { if !$0 { onboarded = true } })) { onboarding }
             .alert("操作提示", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) { Button("知道了") { store.error = nil } } message: { Text(store.error ?? "") }
+            if let backup = store.pendingBackup, (!appLock || unlocked), phase == .active, onboarded || store.isDemonstration {
+                // 恢复预览由根界面统一呈现；已有表单关闭后才会露出，不丢弃未保存输入。
+                NavigationStack { BackupRestoreView(backup: backup) }.background(Color(uiColor: .systemBackground))
+            }
+            if store.readingBackup { ProgressView("正在校验备份…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)) }
             if store.saving { Color.black.opacity(0.1).ignoresSafeArea(); ProgressView("正在保存…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)) }
             if (appLock && !unlocked) || phase != .active {
                 Color(uiColor: .systemBackground).ignoresSafeArea()
@@ -65,6 +81,15 @@ struct RootView: View {
             if arguments.contains("--预览资产") { tab = 2 }
             if arguments.contains("--预览账本") { tab = 3 }
             if arguments.contains("--预览记账") { add = true }
+            if arguments.contains("--预览数据管理") { tab = 4 }
+            if arguments.contains("--备份文件自检") {
+                Task {
+                    let result = await store.checkBackupFileFlow()
+                    let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    try? result.write(to: directory.appendingPathComponent("backup-self-check.txt"), atomically: true, encoding: .utf8)
+                }
+            }
             #endif
         }.onChange(of: phase) { _, value in if value == .background { unlocked = false } }
         .onChange(of: appLock) { unlocked = false }

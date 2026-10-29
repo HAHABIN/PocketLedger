@@ -50,6 +50,24 @@ public enum BackupService {
         try backup.data.validate()
         return backup
     }
+    public static let maximumFileSize = 50 * 1024 * 1024
+    // 文件选择器、文件 App 和 AirDrop 均走相同的限量读取与校验。
+    public static func readFile(_ url: URL) throws -> Backup {
+        guard url.isFileURL else { throw LedgerError.invalid("只支持从本地文件或系统文件提供器打开备份") }
+        guard ["json", "pocketledger"].contains(url.pathExtension.lowercased()) else { throw LedgerError.invalid("请选择 JSON 或 pocketledger 完整备份；CSV 不能用于恢复") }
+        let granted = url.startAccessingSecurityScopedResource()
+        defer { if granted { url.stopAccessingSecurityScopedResource() } }
+        let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+        guard values.isRegularFile == true, (values.fileSize ?? 0) <= maximumFileSize else { throw LedgerError.invalid("备份不是普通文件或超过50MB") }
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var data = Data()
+        while let chunk = try handle.read(upToCount: min(1024 * 1024, maximumFileSize + 1 - data.count)), !chunk.isEmpty {
+            data.append(chunk)
+            guard data.count <= maximumFileSize else { throw LedgerError.invalid("备份超过50MB") }
+        }
+        return try preview(data)
+    }
     public static func decode(_ data: Data) throws -> LedgerState { try preview(data).data }
     public static func restore(_ incoming: LedgerState, into current: LedgerState, mode: ImportMode) throws -> LedgerState {
         try incoming.validate(); return incoming

@@ -215,3 +215,24 @@ public enum BookkeepingService {
         state.entries.append(Entry(bookID: book, accountID: accountID, kind: .adjustment, amount: delta, category: "余额校正", date: date, note: reason))
     }
 }
+
+// 完全虚构的演示资料，仅由调试预览和测试显式使用。
+extension LedgerState {
+    public static var demonstration: LedgerState {
+        var state = LedgerState.initial
+        state.books[0].name = "示例日用账本"
+        state.books += [Book(name: "示例出行账本"), Book(name: "示例兴趣账本")]
+        state.accounts[0].name = "示例现金"
+        state.accounts[0].opening = 120_000
+        state.accounts += [Account(name: "示例钱包甲", kind: .wallet, opening: 88_888), Account(name: "示例借记卡乙", kind: .bank, opening: 356_789), Account(name: "示例信用账户丙", kind: .credit, opening: -23_456)]
+        let book = state.books[0].id, account = state.accounts[0].id, today = Date()
+        state.entries = [
+            Entry(bookID: book, accountID: account, kind: .income, amount: 456_700, category: "工资", date: today, note: "虚构收入示例"),
+            Entry(bookID: book, accountID: account, kind: .expense, amount: 3_680, category: "餐饮", date: today, note: "虚构用餐示例"),
+            Entry(bookID: book, accountID: account, kind: .expense, amount: 1_290, category: "交通", date: today, note: "虚构出行示例"),
+            Entry(bookID: book, accountID: account, kind: .expense, amount: 4_880, category: "购物", date: today, note: "虚构购物示例")
+        ]
+        state.budgets = [Budget(bookID: book, month: month(today), amount: 98_000)]
+        return state
+    }
+}

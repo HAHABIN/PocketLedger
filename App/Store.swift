@@ -11,21 +11,17 @@ import LedgerCore
         }
     }
     @Published var error: String?
+    @Published var pendingBackup: Backup?
+    @Published private(set) var readingBackup = false
+    let isDemonstration: Bool
     private let repository: SQLiteLedgerRepository
-    private init(repository: SQLiteLedgerRepository, state: LedgerState) {
-        self.repository = repository; self.state = state
+    private init(repository: SQLiteLedgerRepository, state: LedgerState, isDemonstration: Bool = false) {
+        self.repository = repository; self.state = state; self.isDemonstration = isDemonstration
         let saved = UserDefaults.standard.string(forKey: "currentBookID")
         bookID = saved == "all" ? nil : saved.flatMap(UUID.init(uuidString:)) ?? state.defaultBookID
         if let bookID, !state.books.contains(where: { $0.id == bookID && !$0.archived }) { self.bookID = state.defaultBookID }
     }
-    static var preview: Store {
-        var state = LedgerState.initial; state.accounts[0].opening = 200_000
-        state.entries = [Entry(bookID: state.books[0].id, accountID: state.accounts[0].id, kind: .expense, amount: 2500, category: "餐饮", note: "午餐"), Entry(bookID: state.books[0].id, accountID: state.accounts[0].id, kind: .income, amount: 800_000, category: "工资")]
-        state.accounts += [Account(name: "微信零钱", kind: .wallet, opening: 299_513), Account(name: "银行卡", kind: .bank, opening: 526_444), Account(name: "信用卡", kind: .credit, opening: -66_475)]
-        state.books += [Book(name: "家庭账本"), Book(name: "旅行账本")]
-        state.budgets = [Budget(bookID: state.books[0].id, month: LedgerState.month(Date()), amount: 150_000)]
-        return Store(repository: try! SQLiteLedgerRepository(path: ":memory:"), state: state)
-    }
+    static var preview: Store { Store(repository: try! SQLiteLedgerRepository(path: ":memory:"), state: .demonstration, isDemonstration: true) }
     static func open() async throws -> Store {
         let (repository, state) = try await Task.detached(priority: .userInitiated) {
             let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("PocketLedger", isDirectory: true)
@@ -84,6 +80,34 @@ import LedgerCore
         }.value
         state = next; bookID = next.settings?["currentBookID"].flatMap(UUID.init(uuidString:)) ?? next.defaultBookID
     }
+    func stageBackup(_ url: URL) async {
+        guard !saving && !readingBackup && pendingBackup == nil else { error = "请先完成或取消当前备份操作"; return }
+        readingBackup = true; defer { readingBackup = false }
+        do { pendingBackup = try await Task.detached(priority: .userInitiated) { try BackupService.readFile(url) }.value }
+        catch { self.error = error.localizedDescription }
+    }
+    #if DEBUG
+    // 模拟器自检只读取临时虚构文件，正式数据库及恢复点均不修改。
+    func checkBackupFileFlow() async -> String {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        do {
+            let before = state
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let file = directory.appendingPathComponent("fictional.pocketledger")
+            try BackupService.export(.demonstration).write(to: file)
+            await stageBackup(file)
+            guard pendingBackup != nil, state == before else { throw LedgerError.invalid("备份读取改变了账本或没有生成预览") }
+            pendingBackup = nil
+            let broken = directory.appendingPathComponent("broken.json")
+            try Data("invalid".utf8).write(to: broken)
+            await stageBackup(broken)
+            guard pendingBackup == nil, state == before, error != nil else { throw LedgerError.invalid("损坏文件没有被拒绝") }
+            error = nil
+            return "PASS：备份预览、取消、损坏文件拒绝和原数据保留"
+        } catch { return "FAIL：" + error.localizedDescription }
+    }
+    #endif
     func previousBackup() throws -> Data {
         let dir = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
         return try Data(contentsOf: dir.appendingPathComponent("before-restore.json"))

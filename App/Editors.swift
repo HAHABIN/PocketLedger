@@ -30,6 +30,7 @@ struct EntryEditor: View {
     var body: some View {
         NavigationStack {
             Form {
+                if store.isDemonstration { Text("虚构示例 · 不写入正式账本").font(.caption).foregroundStyle(.secondary) }
                 Section {
                     if existing == nil && loan == nil && ![EntryKind.lend, .borrow, .creditRepayment].contains(initialKind) {
                         Picker("类型", selection: $kind) { ForEach([EntryKind.expense, .income, .transfer], id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)

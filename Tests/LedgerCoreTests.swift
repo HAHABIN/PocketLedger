@@ -195,3 +195,54 @@ final class DatabaseSafetyTests: XCTestCase {
         XCTAssertEqual(try repo.load()?.accounts.map(\.id), s.accounts.map(\.id))
     }
 }
+
+final class BackupFileTests: XCTestCase {
+    func testDedicatedBackupAndLegacyJSONUseIdenticalValidation() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let state = LedgerState.demonstration
+        for name in ["fictional.pocketledger", "fictional.json", "FICTIONAL.JSON"] {
+            let url = directory.appendingPathComponent(name)
+            try BackupService.export(state).write(to: url)
+            let backup = try BackupService.readFile(url)
+            XCTAssertEqual(backup.data.netWorth, state.netWorth)
+            XCTAssertEqual(backup.data.entries.map(\.id), state.entries.map(\.id))
+        }
+    }
+    func testInvalidFilesDoNotChangeDatabase() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repo = try SQLiteLedgerRepository(path: ":memory:")
+        let initial = LedgerState.initial; try repo.save(initial)
+        let csv = directory.appendingPathComponent("not-a-backup.csv")
+        try BackupService.csv(.demonstration).write(to: csv)
+        XCTAssertThrowsError(try BackupService.readFile(csv))
+        let broken = directory.appendingPathComponent("broken.json")
+        try Data("invalid".utf8).write(to: broken)
+        XCTAssertThrowsError(try BackupService.readFile(broken))
+        XCTAssertThrowsError(try BackupService.readFile(directory.appendingPathComponent("missing.json")))
+        XCTAssertThrowsError(try BackupService.readFile(URL(string: "https://example.invalid/backup.json")!))
+        XCTAssertEqual(try repo.load(), initial)
+    }
+    func testOversizedFileIsRejectedBeforeReading() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".pocketledger")
+        FileManager.default.createFile(atPath: url.path, contents: Data())
+        defer { try? FileManager.default.removeItem(at: url) }
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: UInt64(BackupService.maximumFileSize + 1)); try handle.close()
+        XCTAssertThrowsError(try BackupService.readFile(url))
+    }
+    func testDemonstrationIsExplicitAndFreshInstallStaysEmpty() throws {
+        let demo = LedgerState.demonstration
+        try demo.validate()
+        XCTAssertTrue(demo.accounts.allSatisfy { $0.name.hasPrefix("示例") })
+        XCTAssertTrue(demo.books.allSatisfy { $0.name.hasPrefix("示例") })
+        XCTAssertTrue(demo.entries.allSatisfy { $0.note.hasPrefix("虚构") })
+        let initial = LedgerState.initial
+        XCTAssertTrue(initial.entries.isEmpty)
+        XCTAssertTrue(initial.loans.isEmpty)
+        XCTAssertTrue(initial.accounts.allSatisfy { $0.opening == 0 })
+    }
+}
