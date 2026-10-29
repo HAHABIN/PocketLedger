@@ -61,7 +61,7 @@ struct EntryEditor: View {
                 }
                 if let localError { Text(localError).foregroundStyle(Color.expense) }
             }.scrollContentBackground(.hidden).background(Color(uiColor: .systemBackground)).navigationTitle(existing == nil ? "记一笔" : "编辑交易").navigationBarTitleDisplayMode(.inline)
-                .safeAreaInset(edge: .bottom) { Button("保存", action: { Task { await save() } }).disabled(store.saving).buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity).padding().background(.regularMaterial) }
+                .safeAreaInset(edge: .bottom) { Button(action: { Task { await save() } }) { Text("保存").font(.headline).foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: 52).background(LinearGradient(colors: [.brand, Color(red: 1, green: 0.56, blue: 0.43)], startPoint: .leading, endPoint: .trailing), in: Capsule()) }.disabled(store.saving).padding(.horizontal, 16).padding(.vertical, 12).background(.regularMaterial) }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { if baseline != fingerprint { discard = true } else { dismiss() } } }
                     ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完成") { amountFocused = false } }
