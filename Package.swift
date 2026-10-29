@@ -6,5 +6,5 @@ let package = Package(
     dependencies: [.package(url: "https://github.com/groue/GRDB.swift.git", exact: "6.29.3")],
     targets: [
         .target(name: "LedgerCore", dependencies: [.product(name: "GRDB", package: "GRDB.swift")], path: "Core"),
-        .testTarget(name: "LedgerCoreTests", dependencies: ["LedgerCore"], path: "Tests")
+        .testTarget(name: "LedgerCoreTests", dependencies: ["LedgerCore", .product(name: "GRDB", package: "GRDB.swift")], path: "Tests")
     ])

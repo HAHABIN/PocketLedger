@@ -11,13 +11,16 @@ public struct Backup: Codable {
 }
 public enum ImportMode { case replace }
 public enum BackupService {
-    // Fractional seconds must survive a complete backup/restore round trip.
+    // 备份保留秒的小数部分，避免恢复时丢失交易时间精度。
     private static func encoder() -> JSONEncoder {
         let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]
         e.dateEncodingStrategy = .custom { date, encoder in
-            let seconds = floor(date.timeIntervalSince1970)
+            let raw = date.timeIntervalSince1970
+            var seconds = floor(raw)
+            var units = Int64(((raw - seconds) * 10_000_000).rounded())
+            if units == 10_000_000 { seconds += 1; units = 0 }
             let base = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: seconds))
-            let fraction = String(format: "%.7f", locale: Locale(identifier: "en_US_POSIX"), date.timeIntervalSince1970 - seconds).dropFirst()
+            let fraction = String(format: ".%07lld", units)
             var c = encoder.singleValueContainer(); try c.encode(String(base.dropLast()) + fraction + "Z")
         }; return e
     }
@@ -35,7 +38,8 @@ public enum BackupService {
         }; return d
     }
     public static func export(_ state: LedgerState) throws -> Data {
-        try state.validate(); return try encoder().encode(Backup(data: state))
+        try state.validate(); let data = try encoder().encode(Backup(data: state))
+        guard data.count <= 50 * 1024 * 1024 else { throw LedgerError.invalid("完整备份超过50MB，请减少过长备注后重试") }; return data
     }
     public static func preview(_ data: Data) throws -> Backup {
         guard !data.isEmpty, data.count <= 50 * 1024 * 1024 else { throw LedgerError.invalid("备份为空或超过50MB") }

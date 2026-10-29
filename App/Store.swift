@@ -6,7 +6,7 @@ import LedgerCore
     @Published private(set) var saving = false
     @Published var bookID: UUID? {
         didSet {
-            // Tiny UI preference is persisted separately without rewriting financial rows.
+            // 界面选择单独保存，避免切换账本时重写财务记录。
             UserDefaults.standard.set(bookID?.uuidString ?? "all", forKey: "currentBookID")
         }
     }

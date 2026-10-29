@@ -1,4 +1,5 @@
 import XCTest
+import GRDB
 @testable import LedgerCore
 final class LedgerCoreTests: XCTestCase {
     func testMoney() throws {
@@ -126,5 +127,50 @@ final class AcceptanceTests: XCTestCase {
         try BookkeepingService.adjust(accountID: s.accounts[0].id, target: 0, reason: "盘点", date: Date(), state: &s)
         try s.validate(); XCTAssertEqual(s.balance(s.accounts[0].id), 0)
         XCTAssertEqual(s.entries[0].amount, -1000); XCTAssertEqual(s.entries[0].kind, .adjustment)
+    }
+}
+
+final class DatabaseSafetyTests: XCTestCase {
+    func testSQLiteWriteFailureRollsBackAllRows() throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let repo = try SQLiteLedgerRepository(path: path)
+        let initial = LedgerState.initial; try repo.save(initial)
+        let connection = try DatabaseQueue(path: path)
+        try connection.write { db in
+            try db.execute(sql: "CREATE TRIGGER reject_posting BEFORE INSERT ON postings BEGIN SELECT RAISE(ABORT, 'injected failure'); END")
+        }
+        var next = initial
+        next.books.append(Book(name: "不应残留的账本"))
+        next.entries.append(Entry(bookID: initial.books[0].id, accountID: initial.accounts[0].id, kind: .income, amount: 100))
+        XCTAssertThrowsError(try repo.save(next))
+        XCTAssertEqual(try repo.load(), initial)
+        XCTAssertEqual(try connection.read { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM transactions") }, 0)
+    }
+    func testLegacyDatabaseMigration() throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let s = LedgerState.initial
+        let connection = try DatabaseQueue(path: path)
+        var migrator = DatabaseMigrator()
+        migrator.registerMigration("v1") { db in
+            try db.execute(sql: "CREATE TABLE ledger (id INTEGER PRIMARY KEY,payload BLOB NOT NULL)")
+            try db.execute(sql: "INSERT INTO ledger VALUES (1,?)", arguments: [try JSONEncoder().encode(s)])
+        }
+        try migrator.migrate(connection)
+        XCTAssertEqual(try SQLiteLedgerRepository(path: path).load(), s)
+    }
+    func testTwentyThousandRecordsAndAccountOrder() throws {
+        let repo = try SQLiteLedgerRepository(path: ":memory:")
+        var s = LedgerState.initial
+        let bank = Account(name: "银行", kind: .bank); s.accounts.insert(bank, at: 0)
+        s.entries = (0..<20_000).map { _ in Entry(bookID: s.books[0].id, accountID: bank.id, kind: .income, amount: 1) }
+        try repo.save(s)
+        let loaded = try XCTUnwrap(repo.load())
+        XCTAssertEqual(loaded.entries.count, 20_000); XCTAssertEqual(loaded.balance(bank.id), 20_000)
+        XCTAssertEqual(loaded.accounts.map(\.id), s.accounts.map(\.id))
+        s.entries[0].amount = 5; s.accounts.reverse(); try repo.save(s)
+        XCTAssertEqual(try repo.load()?.balance(bank.id), 20_004)
+        XCTAssertEqual(try repo.load()?.accounts.map(\.id), s.accounts.map(\.id))
     }
 }

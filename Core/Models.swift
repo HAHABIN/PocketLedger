@@ -6,7 +6,7 @@ public enum LedgerError: LocalizedError {
 }
 
 public enum Money {
-    // Bounded to keep every sum exact and reject hostile backup amounts.
+    // 限制单笔金额，确保累计计算不会溢出并拒绝异常备份金额。
     public static let limit: Int64 = 1_000_000_000_000
     public static func parse(_ text: String, signed: Bool = false) throws -> Int64 {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -37,7 +37,7 @@ public struct Account: Codable, Identifiable, Equatable {
     public var id = UUID()
     public var name: String
     public var kind: AccountKind
-    // Signed balance: negative means debt, including credit card debt.
+    // 统一有符号余额：负数代表欠款，信用卡也遵循此规则。
     public var opening: Int64
     public var archived = false
     public var includeInNetWorth: Bool? = true
@@ -75,7 +75,7 @@ public struct Loan: Codable, Identifiable, Equatable {
 public struct Budget: Codable, Identifiable, Equatable {
     public var id = UUID()
     public var bookID: UUID
-    public var month: String // Gregorian yyyy-MM, local timezone
+    public var month: String // 公历 yyyy-MM，使用本地时区
     public var amount: Int64
     public init(bookID: UUID, month: String, amount: Int64) { self.bookID = bookID; self.month = month; self.amount = amount }
 }
@@ -114,7 +114,7 @@ public struct LedgerState: Codable, Equatable {
         var s = LedgerState(); let b = Book(name: "日常账本"); s.books = [b]; s.defaultBookID = b.id
         s.accounts = [Account(name: "现金", kind: .cash)]; return s
     }
-    // Signed postings: debt is negative here, displayed as positive amount owed in UI.
+    // 过账使用有符号金额，负债在内部为负，界面转换为正数欠款。
     public var postings: [Posting] { entries.flatMap(BookkeepingService.postings) }
     public var balances: [UUID: Int64] {
         var result = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0.opening) })

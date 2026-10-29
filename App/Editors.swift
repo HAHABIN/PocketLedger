@@ -61,7 +61,7 @@ struct EntryEditor: View {
                 }
                 if let localError { Text(localError).foregroundStyle(Color.expense) }
             }.navigationTitle(existing == nil ? "记一笔" : "编辑交易")
-                .safeAreaInset(edge: .bottom) { Button("保存这笔记录", action: { Task { await save() } }).buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity).padding().background(.regularMaterial) }
+                .safeAreaInset(edge: .bottom) { Button("保存这笔记录", action: { Task { await save() } }).disabled(store.saving).buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity).padding().background(.regularMaterial) }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { if baseline != fingerprint { discard = true } else { dismiss() } } }
                     ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完成") { amountFocused = false } }
@@ -164,6 +164,12 @@ struct AccountDetail: View {
             if let account {
                 SummaryCard(title: account.kind.isDebt ? "当前欠款" : "账户余额", amount: account.kind.isDebt ? -store.state.balance(id) : store.state.balance(id))
                 if !account.kind.isDebt && store.state.balance(id) < 0 { Label("账户出现负余额，请核对流水或余额", systemImage: "exclamationmark.triangle").foregroundStyle(Color.expense) }
+                Section("本月资金流动 · 包含转账及本金") {
+                    let interval = Calendar.current.dateInterval(of: .month, for: Date())!
+                    let postings = store.entries(book: nil, interval: interval, account: id).flatMap(BookkeepingService.postings).filter { $0.accountID == id }
+                    HStack { Text("流入"); Spacer(); MoneyText(amount: postings.filter { $0.deltaCents > 0 }.reduce(0) { $0 + $1.deltaCents }) }
+                    HStack { Text("流出"); Spacer(); MoneyText(amount: -postings.filter { $0.deltaCents < 0 }.reduce(0) { $0 + $1.deltaCents }) }
+                }
                 Section("账户设置") {
                     Button("编辑名称、图标和统计设置") { edit = true }
                     Button(account.archived ? "重新启用" : "归档账户") { Task { await store.perform { s in if let i = s.accounts.firstIndex(where: { $0.id == id }) { s.accounts[i].archived.toggle() } } } }
@@ -199,6 +205,9 @@ struct AccountEditor: View {
     @State private var icon = "creditcard"
     @State private var note = ""
     @State private var localError: String?
+    @State private var baseline = ""
+    @State private var discard = false
+    var fingerprint: String { "\(name)|\(kind)|\(balance)|\(included)|\(icon)|\(note)" }
     var body: some View {
         NavigationStack { Form {
             TextField("账户名称", text: $name)
@@ -212,9 +221,11 @@ struct AccountEditor: View {
             TextField("账户备注", text: $note)
             if let localError { Text(localError).foregroundStyle(Color.expense) }
         }.navigationTitle(existing == nil ? "新增账户" : "编辑账户").toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-            ToolbarItem(placement: .confirmationAction) { Button("保存") { Task { await save() } } }
-        }.onAppear { if let existing { name = existing.name; kind = existing.kind; included = existing.includeInNetWorth != false; icon = existing.icon ?? "creditcard"; note = existing.note ?? "" } }
+            ToolbarItem(placement: .cancellationAction) { Button("取消") { if baseline != fingerprint { discard = true } else { dismiss() } } }
+            ToolbarItem(placement: .confirmationAction) { Button("保存") { Task { await save() } }.disabled(store.saving) }
+        }.onAppear { guard baseline.isEmpty else { return }; if let existing { name = existing.name; kind = existing.kind; included = existing.includeInNetWorth != false; icon = existing.icon ?? "creditcard"; note = existing.note ?? "" }; baseline = fingerprint }
+        .interactiveDismissDisabled(baseline != fingerprint)
+        .confirmationDialog("放弃未保存的账户修改？", isPresented: $discard, titleVisibility: .visible) { Button("放弃修改", role: .destructive) { dismiss() } }
         }
     }
     func save() async {
@@ -238,6 +249,9 @@ struct LoansView: View {
         List {
             Section {
                 SummaryCard(title: "未结清", amount: loans.reduce(0) { $0 + store.state.outstanding($1.id) })
+                let principal = store.state.entries.filter { e in loans.contains { $0.id == e.loanID } && (e.kind == .lend || e.kind == .borrow) }.reduce(Int64(0)) { $0 + $1.amount }
+                HStack { Text("累计本金"); Spacer(); MoneyText(amount: principal) }
+                HStack { Text("已归还"); Spacer(); MoneyText(amount: principal - loans.reduce(0) { $0 + store.state.outstanding($1.id) }) }
                 LabeledContent("借贷笔数", value: "\(loans.count)")
                 LabeledContent("逾期笔数", value: "\(loans.filter { loanStatus($0, state: store.state) == "已逾期" }.count)")
             }

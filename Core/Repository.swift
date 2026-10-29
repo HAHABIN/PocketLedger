@@ -30,7 +30,7 @@ public final class SQLiteLedgerRepository: LedgerRepository, @unchecked Sendable
                 """)
             if let data = try Data.fetchOne(db, sql: "SELECT payload FROM ledger WHERE id=1") {
                 var state = try JSONDecoder().decode(LedgerState.self, from: data)
-                // Legacy releases represented credit repayment as a transfer.
+                // 旧版将信用卡还款保存为普通转账，迁移时补充明确类型。
                 for i in state.entries.indices where state.entries[i].kind == .transfer {
                     if state.accounts.first(where: { $0.id == state.entries[i].targetID })?.kind.isDebt == true { state.entries[i].kind = .creditRepayment }
                 }
@@ -65,13 +65,13 @@ public final class SQLiteLedgerRepository: LedgerRepository, @unchecked Sendable
     }
     private static func write(_ state: LedgerState, db: Database) throws {
         let encoder = JSONEncoder()
-        // Diff rows: ordinary saves do not rewrite twenty thousand unchanged records.
+        // 逐行比较后更新，普通保存不重写两万笔未变更的记录。
         func sync<T: Encodable & Identifiable>(_ table: String, values: [T], insert: (T, Data) throws -> Void) throws where T.ID == UUID {
             let old = try Row.fetchAll(db, sql: "SELECT id,payload FROM \(table)")
             let cache = Dictionary(uniqueKeysWithValues: old.map { ( $0["id"] as String, $0["payload"] as Data) })
             for value in values { let data = try encoder.encode(value); if cache[value.id.uuidString] != data { try insert(value, data) } }
         }
-        // Remove child rows before parents to preserve real foreign-key constraints.
+        // 先删除子记录再处理父记录，保持数据库外键完整。
         let entryIDs = Set(state.entries.map { $0.id.uuidString })
         for id in try String.fetchAll(db, sql: "SELECT id FROM transactions") where !entryIDs.contains(id) { try db.execute(sql: "DELETE FROM transactions WHERE id=?", arguments: [id]) }
         try sync("books", values: state.books) { v,d in try db.execute(sql: "INSERT INTO books VALUES (?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload", arguments: [v.id.uuidString,d]) }
@@ -83,7 +83,7 @@ public final class SQLiteLedgerRepository: LedgerRepository, @unchecked Sendable
             try db.execute(sql: "DELETE FROM postings WHERE transaction_id=?", arguments: [e.id.uuidString])
             for p in BookkeepingService.postings(e) { try db.execute(sql: "INSERT INTO postings VALUES (?,?,?,?)", arguments: [p.id,p.transactionID.uuidString,p.accountID.uuidString,p.deltaCents]) }
         }
-        // Budgets can be removed with a book.
+        // 删除账本时一并删除其预算。
         try db.execute(sql: "DELETE FROM budgets")
         for v in state.budgets { try db.execute(sql: "INSERT INTO budgets VALUES (?,?,?)", arguments: [v.id.uuidString,v.bookID.uuidString,try encoder.encode(v)]) }
         for (table, ids) in [("loans", Set(state.loans.map { $0.id.uuidString })), ("accounts", Set(state.accounts.map { $0.id.uuidString })), ("books", Set(state.books.map { $0.id.uuidString }))] {
