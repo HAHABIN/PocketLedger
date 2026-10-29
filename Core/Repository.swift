@@ -89,9 +89,14 @@ public final class SQLiteLedgerRepository: LedgerRepository, @unchecked Sendable
             try db.execute(sql: "DELETE FROM postings WHERE transaction_id=?", arguments: [e.id.uuidString])
             for p in BookkeepingService.postings(e) { try db.execute(sql: "INSERT INTO postings VALUES (?,?,?,?)", arguments: [p.id,p.transactionID.uuidString,p.accountID.uuidString,p.deltaCents]) }
         }
-        // 删除账本时一并删除其预算。
-        try db.execute(sql: "DELETE FROM budgets")
-        for v in state.budgets { try db.execute(sql: "INSERT INTO budgets VALUES (?,?,?)", arguments: [v.id.uuidString,v.bookID.uuidString,try encoder.encode(v)]) }
+        // 仅增量维护预算，避免每次记账都删除并重建全部预算。
+        let budgetIDs = Set(state.budgets.map { $0.id.uuidString })
+        for id in try String.fetchAll(db, sql: "SELECT id FROM budgets") where !budgetIDs.contains(id) {
+            try db.execute(sql: "DELETE FROM budgets WHERE id=?", arguments: [id])
+        }
+        try sync("budgets", values: state.budgets) { v, data in
+            try db.execute(sql: "INSERT INTO budgets (id,book_id,payload) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET book_id=excluded.book_id,payload=excluded.payload", arguments: [v.id.uuidString,v.bookID.uuidString,data])
+        }
         for (table, ids) in [("loans", Set(state.loans.map { $0.id.uuidString })), ("accounts", Set(state.accounts.map { $0.id.uuidString })), ("books", Set(state.books.map { $0.id.uuidString }))] {
             for id in try String.fetchAll(db, sql: "SELECT id FROM \(table)") where !ids.contains(id) { try db.execute(sql: "DELETE FROM \(table) WHERE id=?", arguments: [id]) }
         }
