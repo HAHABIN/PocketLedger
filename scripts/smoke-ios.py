@@ -20,12 +20,16 @@ app = pathlib.Path('build/Build/Products/Debug-iphonesimulator/PocketLedger.app'
 run('xcrun', 'simctl', 'install', device['udid'], str(app))
 print(run('xcrun', 'simctl', 'launch', device['udid'], 'com.example.PocketLedger'))
 
-# 首次安装启动后切换到内存示例模式，生成首页截图供开发验收。
-run('xcrun', 'simctl', 'terminate', device['udid'], 'com.example.PocketLedger')
-run('xcrun', 'simctl', 'launch', device['udid'], 'com.example.PocketLedger', '--界面预览')
-time.sleep(3)
+# 仅使用内存样例逐屏截图，正式数据库不写入示例交易。
 pathlib.Path('screenshots').mkdir(exist_ok=True)
-image = pathlib.Path('screenshots/home.png')
-run('xcrun', 'simctl', 'io', device['udid'], 'screenshot', str(image))
-run('sips', '-Z', '700', str(image))
-print('界面截图开始:' + base64.b64encode(image.read_bytes()).decode('ascii') + ':界面截图结束')
+for page, flag in [('home', None), ('reports', '--预览报表'), ('assets', '--预览资产'), ('books', '--预览账本'), ('entry', '--预览记账')]:
+    subprocess.run(['xcrun', 'simctl', 'terminate', device['udid'], 'com.example.PocketLedger'], check=False)
+    args = ['xcrun', 'simctl', 'launch', device['udid'], 'com.example.PocketLedger', '--界面预览']
+    if flag:
+        args.append(flag)
+    run(*args)
+    time.sleep(3)
+    image = pathlib.Path('screenshots') / (page + '.png')
+    run('xcrun', 'simctl', 'io', device['udid'], 'screenshot', str(image))
+    run('sips', '-Z', '800', str(image))
+    print('截图_' + page + ':' + base64.b64encode(image.read_bytes()).decode('ascii') + ':截图结束')

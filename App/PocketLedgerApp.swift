@@ -58,6 +58,14 @@ struct RootView: View {
                     if phase == .active { Button("解锁账本", action: unlock).buttonStyle(.borderedProminent).disabled(authenticating) }
                 }
             }
+        }.onAppear {
+            #if DEBUG
+            let arguments = ProcessInfo.processInfo.arguments
+            if arguments.contains("--预览报表") { tab = 1 }
+            if arguments.contains("--预览资产") { tab = 2 }
+            if arguments.contains("--预览账本") { tab = 3 }
+            if arguments.contains("--预览记账") { add = true }
+            #endif
         }.onChange(of: phase) { _, value in if value == .background { unlocked = false } }
         .onChange(of: appLock) { unlocked = false }
     }
@@ -66,7 +74,7 @@ struct RootView: View {
             tabButton("首页", "house", 0); tabButton("报表", "chart.bar.xaxis", 1)
             Button { add = true } label: { Image(systemName: "plus").font(.title2.bold()).foregroundStyle(.white).frame(width: 56, height: 56).background(Color.brand.gradient, in: Circle()) }.accessibilityLabel("记一笔").padding(.horizontal, 8)
             tabButton("资产", "creditcard", 2); tabButton("账本", "books.vertical", 3)
-        }.padding(.horizontal, 10).padding(.vertical, 8).background(.regularMaterial)
+        }.padding(.horizontal, 10).padding(.vertical, 8).background(Color(uiColor: .systemBackground)).overlay(alignment: .top) { Divider().opacity(0.5) }
     }
     func tabButton(_ title: String, _ icon: String, _ value: Int) -> some View {
         Button { tab = value } label: { VStack(spacing: 5) { Image(systemName: icon).font(.title3); Text(title).font(.caption) }.frame(maxWidth: .infinity).frame(minHeight: 48).foregroundStyle(tab == value ? Color.brand : Color.secondary) }.accessibilityAddTraits(tab == value ? .isSelected : [])

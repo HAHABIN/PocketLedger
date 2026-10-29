@@ -38,9 +38,9 @@ struct EntryEditor: View {
                 }
                 if kind == .expense || kind == .income {
                     Section("分类") {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 65))], spacing: 12) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 72))], spacing: 12) {
                             ForEach(store.state.categories + ((existing != nil && !store.state.categories.contains(existing!.category) && (existing!.kind == .expense || existing!.kind == .income)) ? [existing!.category] : []), id: \.self) { item in
-                                Button { category = item } label: { VStack(spacing: 6) { Image(systemName: categoryIcon(item)).font(.title2); Text(item).font(.caption) }.frame(maxWidth: .infinity).frame(minHeight: 60).foregroundStyle(category == item ? Color.brand : Color.primary).background(category == item ? Color.brand.opacity(0.1) : Color.clear, in: RoundedRectangle(cornerRadius: 12)) }.buttonStyle(.plain)
+                                Button { category = item } label: { VStack(spacing: 6) { DesignIcon(symbol: categoryIcon(item), color: categoryColor(item), size: 42); Text(item).font(.caption) }.frame(maxWidth: .infinity).frame(minHeight: 60).foregroundStyle(category == item ? Color.brand : Color.primary).background(category == item ? Color.brand.opacity(0.1) : Color.clear, in: RoundedRectangle(cornerRadius: 12)) }.buttonStyle(.plain)
                             }
                         }
                     }
@@ -60,8 +60,8 @@ struct EntryEditor: View {
                     if kind == .creditRepayment { Text("还款同时减少资金账户和负债，不计入支出。").font(.caption).foregroundStyle(.secondary) }
                 }
                 if let localError { Text(localError).foregroundStyle(Color.expense) }
-            }.navigationTitle(existing == nil ? "记一笔" : "编辑交易")
-                .safeAreaInset(edge: .bottom) { Button("保存这笔记录", action: { Task { await save() } }).disabled(store.saving).buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity).padding().background(.regularMaterial) }
+            }.scrollContentBackground(.hidden).background(Color(uiColor: .systemBackground)).navigationTitle(existing == nil ? "记一笔" : "编辑交易").navigationBarTitleDisplayMode(.inline)
+                .safeAreaInset(edge: .bottom) { Button("保存", action: { Task { await save() } }).disabled(store.saving).buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity).padding().background(.regularMaterial) }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { if baseline != fingerprint { discard = true } else { dismiss() } } }
                     ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完成") { amountFocused = false } }
@@ -112,8 +112,8 @@ struct AssetsView: View {
     var body: some View {
         List {
             Section {
-                HStack { SummaryCard(title: "净资产", amount: store.state.netWorth); PrivacyButton() }
-                HStack { SummaryCard(title: "总资产", amount: store.state.assets); SummaryCard(title: "总负债", amount: store.state.liabilities) }
+                GradientOverview(title: "净资产（元）", main: store.state.netWorth, items: [("总资产", store.state.assets), ("总负债", store.state.liabilities)])
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                 Button("还信用卡 / 偿还其他负债") { repayment = true }
             }.listRowSeparator(.hidden)
             Section {
@@ -127,7 +127,7 @@ struct AssetsView: View {
                 NavigationLink { LoansView(isLent: false) } label: { HStack { Text("我借入 · 待偿还"); Spacer(); MoneyText(amount: store.state.payable) } }
             }
             Button("添加资金账户", systemImage: "plus.circle") { add = true }
-        }.navigationTitle("我的资产").toolbar { EditButton(); Button("转账") { transfer = true } }
+        }.listSectionSpacing(16).navigationTitle("资产").navigationBarTitleDisplayMode(.inline).toolbar { EditButton(); Button("转账") { transfer = true } }
         .sheet(isPresented: $add) { AccountEditor() }
         .sheet(isPresented: $transfer) { EntryEditor(initialKind: .transfer) }
         .sheet(isPresented: $repayment) { EntryEditor(initialKind: .creditRepayment) }
@@ -137,7 +137,7 @@ struct AssetsView: View {
         if accounts.isEmpty { Text("暂无账户").foregroundStyle(.secondary) }
         ForEach(accounts) { account in
             NavigationLink { AccountDetail(id: account.id) } label: {
-                HStack { Label(account.name + (account.archived ? " · 已归档" : ""), systemImage: account.icon ?? "creditcard"); Spacer(); MoneyText(amount: debt ? -store.state.balance(account.id) : store.state.balance(account.id)) }
+                HStack { DesignIcon(symbol: account.icon ?? "creditcard", color: account.kind.isDebt ? .orange : account.kind == .cash ? .blue : account.kind == .wallet ? .green : .brand, size: 34); Text(account.name + (account.archived ? " · 已归档" : "")); Spacer(); MoneyText(amount: debt ? -store.state.balance(account.id) : store.state.balance(account.id)) }
             }
         }.onMove { indices, destination in
             Task { await store.perform { s in
@@ -295,20 +295,33 @@ struct BooksView: View {
     @EnvironmentObject var store: Store
     @State private var name = ""
     var body: some View {
-        List {
-            Section("创建账本") { TextField("账本名称", text: $name); Button("创建") { Task { await store.perform { $0.books.append(Book(name: name)) }; if store.error == nil { name = "" } } } }
-            Section("全部账本") {
-                ForEach(store.state.books) { book in NavigationLink { BookDetail(id: book.id) } label: {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack { Label(book.name, systemImage: "book.closed"); Spacer(); Text(book.archived ? "已归档" : book.id == store.bookID ? "当前" : book.id == store.state.defaultBookID ? "默认" : "").font(.caption).foregroundStyle(Color.brand) }
-                        let rows = store.entries(book: book.id)
-                        HStack { Text("\(rows.count)笔"); Spacer(); Text("收"); MoneyText(amount: rows.filter { $0.kind == .income }.reduce(0) { $0 + $1.amount }); Text("支"); MoneyText(amount: rows.filter { $0.kind == .expense }.reduce(0) { $0 + $1.amount }) }.font(.caption).foregroundStyle(.secondary)
-                    }.padding(.vertical, 8)
-                } }
-            }
-        }.navigationTitle("我的账本")
+        ScrollView {
+            VStack(spacing: 14) {
+                ForEach(store.state.books) { book in
+                    NavigationLink { BookDetail(id: book.id) } label: {
+                        DesignCard {
+                            HStack(spacing: 14) {
+                                DesignIcon(symbol: book.name.contains("旅行") ? "airplane" : book.name.contains("家庭") ? "house.fill" : "book.closed.fill", color: book.name.contains("旅行") ? .blue : book.name.contains("家庭") ? .orange : .brand, size: 48)
+                                VStack(alignment: .leading, spacing: 10) {
+                                    HStack { Text(book.name).font(.headline); if book.id == store.state.defaultBookID { Text("默认账本").font(.caption2).padding(.horizontal, 7).padding(.vertical, 4).foregroundStyle(.orange).background(.orange.opacity(0.1), in: Capsule()) } }
+                                    let rows = store.entries(book: book.id)
+                                    HStack(spacing: 4) { Text("收入"); MoneyText(amount: rows.filter { $0.kind == .income }.reduce(0) { $0 + $1.amount }); Text("支出"); MoneyText(amount: rows.filter { $0.kind == .expense }.reduce(0) { $0 + $1.amount }) }.font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.6)
+                                    if book.archived { Text("已归档").font(.caption).foregroundStyle(.secondary) }
+                                }
+                                Spacer(minLength: 0); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                            }
+                        }
+                    }.buttonStyle(.plain)
+                }
+                DesignCard {
+                    TextField("新账本名称", text: $name).padding(12).background(Color(uiColor: .tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
+                    Button { Task { if await store.perform({ $0.books.append(Book(name: name)) }) { name = "" } } } label: { Label("创建新账本", systemImage: "plus").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(14).overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.brand.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [5]))) }.disabled(store.saving)
+                }
+            }.padding(16)
+        }.background(Color(uiColor: .systemGroupedBackground)).navigationTitle("我的账本").navigationBarTitleDisplayMode(.inline)
     }
 }
+
 struct BookDetail: View {
     @EnvironmentObject var store: Store
     @Environment(\.dismiss) var dismiss

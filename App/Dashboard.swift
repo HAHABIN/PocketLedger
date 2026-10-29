@@ -5,6 +5,35 @@ import LedgerCore
 func categoryIcon(_ name: String) -> String {
     ["餐饮": "fork.knife", "交通": "tram", "购物": "bag", "居住": "house", "娱乐": "gamecontroller", "医疗": "cross.case", "工资": "banknote", "奖金": "gift"][name] ?? "square.grid.2x2"
 }
+// 设计稿共用的卡片、分类图标和渐变汇总组件。
+func categoryColor(_ name: String) -> Color {
+    ["餐饮": Color.brand, "交通": .blue, "购物": .purple, "娱乐": .orange, "居住": .mint, "医疗": .green, "工资": .income, "奖金": .orange][name] ?? .gray
+}
+struct DesignIcon: View {
+    var symbol: String
+    var color: Color
+    var size: CGFloat = 40
+    var body: some View { Image(systemName: symbol).font(.system(size: size * 0.42, weight: .semibold)).foregroundStyle(.white).frame(width: size, height: size).background(color.gradient, in: Circle()) }
+}
+struct DesignCard<Content: View>: View {
+    @ViewBuilder var content: Content
+    var body: some View { VStack(alignment: .leading, spacing: 16) { content }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18)).overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.primary.opacity(0.025))) }
+}
+struct GradientOverview: View {
+    var title: String
+    var main: Int64? = nil
+    var items: [(String, Int64)]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack { Text(title).font(.subheadline.weight(.semibold)); Spacer(); PrivacyButton() }
+            if let main { MoneyText(amount: main).font(.system(size: 34, weight: .semibold, design: .rounded)).minimumScaleFactor(0.5).lineLimit(1) }
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(items.indices, id: \.self) { i in VStack(alignment: .leading, spacing: 8) { Text(items[i].0).font(.caption).opacity(0.9); MoneyText(amount: items[i].1).font(.system(.subheadline, design: .rounded).weight(.semibold)).minimumScaleFactor(0.5).lineLimit(1) }.frame(maxWidth: .infinity, alignment: .leading) }
+            }
+        }.foregroundStyle(.white).padding(20).frame(maxWidth: .infinity, alignment: .leading)
+        .background { ZStack(alignment: .bottomTrailing) { LinearGradient(colors: [.brand, Color(red: 1, green: 0.60, blue: 0.45)], startPoint: .topLeading, endPoint: .bottomTrailing); Circle().fill(.white.opacity(0.08)).frame(width: 210).offset(x: 70, y: 100); Ellipse().fill(.white.opacity(0.07)).frame(width: 260, height: 80).rotationEffect(.degrees(-18)).offset(x: 45, y: 22) }.clipShape(RoundedRectangle(cornerRadius: 20)) }
+    }
+}
 struct MoneyText: View {
     @AppStorage("hideAmounts") private var hidden = false
     var amount: Int64
@@ -38,9 +67,9 @@ struct EntryRow: View {
     var color: Color { entry.kind == .expense ? .expense : entry.kind == .income ? .income : .blue }
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: categoryIcon(entry.category)).foregroundStyle(color).frame(width: 36, height: 36).background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+            DesignIcon(symbol: categoryIcon(entry.category), color: categoryColor(entry.category), size: 38)
             VStack(alignment: .leading, spacing: 5) {
-                Text(entry.category + " · " + entry.kind.rawValue)
+                Text(entry.kind == .expense || entry.kind == .income ? entry.category : entry.kind.rawValue).font(.subheadline.weight(.medium))
                 Text(store.state.accounts.first { $0.id == entry.accountID }?.name ?? "").font(.caption).foregroundStyle(.secondary)
                 if !entry.note.isEmpty { Text(entry.note).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                 Text(entry.date, style: .date).font(.caption2).foregroundStyle(.secondary)
@@ -106,40 +135,32 @@ struct HomeView: View {
     var income: Int64 { baseRows.filter { $0.kind == .income }.reduce(0) { $0 + $1.amount } }
     var expense: Int64 { baseRows.filter { $0.kind == .expense }.reduce(0) { $0 + $1.amount } }
     var body: some View {
-        List {
-            Section {
-                BookPicker()
-                HStack {
-                    Button { shift(-1) } label: { Image(systemName: "chevron.left") }.accessibilityLabel("上个月")
-                    DatePicker(dayOnly ? "日期" : "月份", selection: $month, displayedComponents: .date)
-                    Button { shift(1) } label: { Image(systemName: "chevron.right") }.accessibilityLabel("下个月")
+        ScrollView {
+            VStack(spacing: 16) {
+                HStack { BookPicker().labelsHidden().font(.headline); Spacer(); Button { filtering = true } label: { Image(systemName: "calendar") }.accessibilityLabel("日期筛选"); NavigationLink { SettingsView() } label: { Image(systemName: "gearshape") }.accessibilityLabel("设置") }.foregroundStyle(.primary)
+                VStack(spacing: 10) {
+                    HStack { Button { shift(-1) } label: { Image(systemName: "chevron.left") }; DatePicker(dayOnly ? "日期" : "月份", selection: $month, displayedComponents: .date).labelsHidden(); Spacer(); Button { shift(1) } label: { Image(systemName: "chevron.right") } }.font(.caption)
+                    GradientOverview(title: month.formatted(.dateTime.year().month()), items: [("本月收入", income), ("本月支出", expense), ("本月结余", income - expense)])
                 }
-                HStack { SummaryCard(title: "收入", amount: income); SummaryCard(title: "支出", amount: expense) }
-                HStack { Text("期间结余"); Spacer(); MoneyText(amount: income - expense); PrivacyButton() }
-            }.listRowSeparator(.hidden)
-            Section("快速记账") {
-                HStack { ForEach(["餐饮", "交通", "购物", "娱乐"], id: \.self) { item in Button { quick = item } label: { VStack(spacing: 8) { Image(systemName: categoryIcon(item)).font(.title2); Text(item).font(.caption) }.frame(maxWidth: .infinity).frame(minHeight: 56) }.buttonStyle(.plain).foregroundStyle(Color.brand) } }
-            }
-            Section("本月预算") {
-                if let budget = store.state.budgets.first(where: { $0.bookID == store.bookID && $0.month == LedgerState.month(month) }) {
-                    let spent = store.entries(book: store.bookID, interval: Calendar.current.dateInterval(of: .month, for: month)).filter { $0.kind == .expense }.reduce(Int64(0)) { $0 + $1.amount }
-                    HStack { Text("总预算"); Spacer(); MoneyText(amount: budget.amount) }
-                    ProgressView(value: min(Double(spent) / Double(budget.amount), 1))
-                    HStack { Text(spent > budget.amount ? "已超支" : "剩余"); Spacer(); MoneyText(amount: abs(budget.amount - spent)) }.foregroundStyle(spent > budget.amount ? Color.expense : .secondary)
-                } else if let id = store.bookID { NavigationLink("设置月度预算") { BookDetail(id: id) } }
-                else { Text("选择一个账本后设置预算").foregroundStyle(.secondary) }
-            }
-            Section("账单 · \(rows.count) 笔") {
-                let groups = Dictionary(grouping: Array(rows.prefix(limit))) { Calendar.current.startOfDay(for: $0.date) }
-                if rows.isEmpty { Button("记录第一笔收支", systemImage: "plus.circle") { quick = "餐饮" } }
-                ForEach(groups.keys.sorted(by: >), id: \.self) { day in
-                    Text(day.formatted(date: .abbreviated, time: .omitted)).font(.caption).foregroundStyle(.secondary)
-                    ForEach(groups[day] ?? []) { e in NavigationLink { TransactionDetail(id: e.id) } label: { EntryRow(entry: e) } }
+                HStack(spacing: 8) {
+                    ForEach(["餐饮", "交通", "购物", "娱乐", "更多"], id: \.self) { item in
+                        Button { quick = item == "更多" ? store.state.categories.first : item } label: { VStack(spacing: 8) { DesignIcon(symbol: categoryIcon(item), color: categoryColor(item), size: 42); Text(item).font(.caption).foregroundStyle(.primary) }.frame(maxWidth: .infinity).frame(minHeight: 64) }.buttonStyle(.plain)
+                    }
+                }.padding(.vertical, 6)
+                budgetCard
+                DesignCard {
+                    HStack { Text("最近账单").font(.headline); Spacer(); Text("共 \(rows.count) 笔").font(.caption).foregroundStyle(.secondary) }
+                    if rows.isEmpty { Button("记录第一笔收支", systemImage: "plus.circle") { quick = store.state.categories.first }.frame(maxWidth: .infinity).padding(.vertical, 24) }
+                    let groups = Dictionary(grouping: Array(rows.prefix(limit))) { Calendar.current.startOfDay(for: $0.date) }
+                    ForEach(groups.keys.sorted(by: >), id: \.self) { day in
+                        Text(day.formatted(date: .abbreviated, time: .omitted)).font(.caption).foregroundStyle(.secondary)
+                        ForEach(groups[day] ?? []) { e in NavigationLink { TransactionDetail(id: e.id) } label: { EntryRow(entry: e) }.buttonStyle(.plain); Divider() }
+                    }
+                    if rows.count > limit { Button("加载更多") { limit += 50 }.frame(maxWidth: .infinity) }
                 }
-                if rows.count > limit { Button("加载更多") { limit += 50 } }
-            }
-        }.navigationTitle("轻松记账").searchable(text: $search, prompt: "搜索分类、类型、账户、备注")
-        .toolbar { Button { filtering.toggle() } label: { Image(systemName: "line.3.horizontal.decrease.circle") }.accessibilityLabel("筛选账单"); NavigationLink { SettingsView() } label: { Image(systemName: "gearshape") }.accessibilityLabel("设置") }
+            }.padding(16)
+        }.background(Color(uiColor: .systemGroupedBackground)).navigationTitle("轻松记账").navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $search, prompt: "搜索分类、类型、账户、备注")
         .sheet(isPresented: $filtering) { NavigationStack { Form {
             Toggle("只查看选中日期", isOn: $dayOnly)
             Picker("类型", selection: $kind) { Text("全部").tag(EntryKind?.none); ForEach(EntryKind.allCases, id: \.self) { Text($0.rawValue).tag(Optional($0)) } }
@@ -148,6 +169,21 @@ struct HomeView: View {
             Button("重置") { dayOnly = false; kind = nil; account = nil; category = nil }
         }.navigationTitle("账单筛选").toolbar { Button("完成") { filtering = false } } } }
         .sheet(isPresented: Binding(get: { quick != nil }, set: { if !$0 { quick = nil } })) { EntryEditor(initialCategory: quick ?? "餐饮") }
+    }
+    var budgetCard: some View {
+        DesignCard {
+            if let budget = store.state.budgets.first(where: { $0.bookID == store.bookID && $0.month == LedgerState.month(month) }) {
+                let spent = store.entries(book: store.bookID, interval: Calendar.current.dateInterval(of: .month, for: month)).filter { $0.kind == .expense }.reduce(Int64(0)) { $0 + $1.amount }
+                HStack {
+                    VStack(alignment: .leading, spacing: 8) { Text("本月预算").font(.subheadline.weight(.medium)); HStack(spacing: 3) { MoneyText(amount: spent).font(.headline); Text("/").foregroundStyle(.secondary); MoneyText(amount: budget.amount).font(.caption).foregroundStyle(.secondary) } }
+                    Spacer()
+                    ZStack { Circle().stroke(Color.brand.opacity(0.12), lineWidth: 5); Circle().trim(from: 0, to: min(CGFloat(spent) / CGFloat(budget.amount), 1)).stroke(Color.brand, style: StrokeStyle(lineWidth: 5, lineCap: .round)).rotationEffect(.degrees(-90)); Image(systemName: spent > budget.amount ? "exclamationmark" : "chart.pie").foregroundStyle(Color.brand) }.frame(width: 44, height: 44)
+                }
+                ProgressView(value: min(Double(spent) / Double(budget.amount), 1)).tint(.brand)
+                HStack { Text(spent > budget.amount ? "已超支" : "预算剩余"); Spacer(); MoneyText(amount: abs(budget.amount - spent)) }.font(.caption).foregroundStyle(.secondary)
+            } else if let id = store.bookID { NavigationLink { BookDetail(id: id) } label: { HStack { Label("本月预算", systemImage: "chart.pie"); Spacer(); Text("设置预算").font(.caption) } }.buttonStyle(.plain) }
+            else { Text("选择账本以查看预算").font(.subheadline).foregroundStyle(.secondary) }
+        }
     }
     func shift(_ direction: Int) { month = Calendar.current.date(byAdding: dayOnly ? .day : .month, value: direction, to: month) ?? month }
 }
@@ -172,8 +208,8 @@ struct ReportsView: View {
             Section {
                 let expense = entries.filter { $0.kind == .expense }.reduce(Int64(0)) { $0 + $1.amount }
                 let income = entries.filter { $0.kind == .income }.reduce(Int64(0)) { $0 + $1.amount }
-                HStack { SummaryCard(title: "支出", amount: expense); SummaryCard(title: "收入", amount: income) }
-                SummaryCard(title: "结余", amount: income - expense)
+                HStack(spacing: 8) { SummaryCard(title: "支出", amount: expense); SummaryCard(title: "收入", amount: income); SummaryCard(title: "结余", amount: income - expense) }
+                    .listRowInsets(EdgeInsets(top: 12, leading: 8, bottom: 12, trailing: 8))
             }
             if !hideAmounts {
                 Section("收支趋势") {
@@ -194,7 +230,7 @@ struct ReportsView: View {
                     }
                 }
             }
-        }.navigationTitle("收支报表")
+        }.listSectionSpacing(16).navigationTitle("报表").navigationBarTitleDisplayMode(.inline)
     }
     var trend: some View {
         Chart {

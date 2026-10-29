@@ -21,6 +21,9 @@ import LedgerCore
     static var preview: Store {
         var state = LedgerState.initial; state.accounts[0].opening = 200_000
         state.entries = [Entry(bookID: state.books[0].id, accountID: state.accounts[0].id, kind: .expense, amount: 2500, category: "餐饮", note: "午餐"), Entry(bookID: state.books[0].id, accountID: state.accounts[0].id, kind: .income, amount: 800_000, category: "工资")]
+        state.accounts += [Account(name: "微信零钱", kind: .wallet, opening: 299_513), Account(name: "银行卡", kind: .bank, opening: 526_444), Account(name: "信用卡", kind: .credit, opening: -66_475)]
+        state.books += [Book(name: "家庭账本"), Book(name: "旅行账本")]
+        state.budgets = [Budget(bookID: state.books[0].id, month: LedgerState.month(Date()), amount: 150_000)]
         return Store(repository: try! SQLiteLedgerRepository(path: ":memory:"), state: state)
     }
     static func open() async throws -> Store {
