@@ -1,7 +1,7 @@
 // swift-tools-version: 5.9
 import PackageDescription
 let package = Package(
-    name: "LedgerCore", platforms: [.iOS(.v16), .macOS(.v13)],
+    name: "LedgerCore", platforms: [.iOS(.v17), .macOS(.v13)],
     products: [.library(name: "LedgerCore", targets: ["LedgerCore"])],
     dependencies: [.package(url: "https://github.com/groue/GRDB.swift.git", exact: "6.29.3")],
     targets: [

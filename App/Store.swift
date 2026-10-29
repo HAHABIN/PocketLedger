@@ -3,7 +3,11 @@ import LedgerCore
 
 @MainActor final class Store: ObservableObject {
     @Published private(set) var state: LedgerState
-    @Published var bookID: UUID?
+    @Published var bookID: UUID? {
+        didSet {
+            if bookID != oldValue { var next = state; if next.settings == nil { next.settings = [:] }; next.settings?["currentBookID"] = bookID?.uuidString; do { try repository.save(next); state = next } catch { self.error = error.localizedDescription } }
+        }
+    }
     @Published var error: String?
     private let repository: SQLiteLedgerRepository
     init() throws {
@@ -12,7 +16,7 @@ import LedgerCore
         try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: directory.path)
         repository = try SQLiteLedgerRepository(path: directory.appendingPathComponent("ledger.sqlite").path)
         state = try repository.load() ?? .initial
-        bookID = state.defaultBookID
+        bookID = state.settings?["currentBookID"].flatMap(UUID.init(uuidString:)) ?? state.defaultBookID
         try repository.save(state)
     }
     @discardableResult func perform(_ mutation: (inout LedgerState) throws -> Void) -> Bool {
@@ -31,21 +35,19 @@ import LedgerCore
             (account == nil || e.accountID == account || e.targetID == account)
         }.sorted { $0.date > $1.date }
     }
-    func remove(_ entry: Entry) {
-        perform { s in
-            if entry.kind == .lend || entry.kind == .borrow {
-                guard !s.entries.contains(where: { $0.loanID == entry.loanID && $0.id != entry.id }) else { throw LedgerError.invalid("请先删除关联还款记录") }
-                s.loans.removeAll { $0.id == entry.loanID }
-            }
-            s.entries.removeAll { $0.id == entry.id }
-        }
+    func remove(_ entry: Entry) { perform { try BookkeepingService.remove(entry, from: &$0) } }
+    func clearAll() throws {
+        try repository.save(.initial); state = try repository.load() ?? .initial; bookID = state.defaultBookID
+        let dir = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        let previous = dir.appendingPathComponent("before-restore.json")
+        if FileManager.default.fileExists(atPath: previous.path) { try FileManager.default.removeItem(at: previous) }
     }
     func restore(_ incoming: LedgerState, mode: ImportMode) throws {
         // Keep a recoverable pre-import snapshot outside the live database.
+        let next = try BackupService.restore(incoming, into: state, mode: mode)
         let backup = try BackupService.export(state)
         let dir = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
         try backup.write(to: dir.appendingPathComponent("before-restore.json"), options: [.atomic, .completeFileProtection])
-        let next = try BackupService.restore(incoming, into: state, mode: mode)
         try repository.save(next); state = next; bookID = next.defaultBookID
     }
     func previousBackup() throws -> Data {

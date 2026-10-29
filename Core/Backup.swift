@@ -1,61 +1,69 @@
 import Foundation
 
 public struct Backup: Codable {
-    public var app = "PocketLedger"
-    public var version = 1
+    public var format = "com.localbookkeeping.full-backup"
+    public var schemaVersion = 1
     public var exportedAt = Date()
+    public var currency = "CNY"
+    public var appVersion = "1.0.0"
     public var data: LedgerState
-    public init(data: LedgerState) { self.data = data }
+    public var accountPostings: [Posting]
+    public init(data: LedgerState) { self.data = data; accountPostings = data.postings }
 }
-public enum ImportMode { case replace, merge }
+public enum ImportMode { case replace }
 public enum BackupService {
-    public static func export(_ state: LedgerState) throws -> Data {
-        try state.validate()
-        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601
-        return try encoder.encode(Backup(data: state))
+    // Fractional seconds must survive a complete backup/restore round trip.
+    private static func encoder() -> JSONEncoder {
+        let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]
+        e.dateEncodingStrategy = .custom { date, encoder in
+            let seconds = floor(date.timeIntervalSince1970)
+            let base = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: seconds))
+            let fraction = String(format: "%.7f", locale: Locale(identifier: "en_US_POSIX"), date.timeIntervalSince1970 - seconds).dropFirst()
+            var c = encoder.singleValueContainer(); try c.encode(String(base.dropLast()) + fraction + "Z")
+        }; return e
     }
-    public static func decode(_ data: Data) throws -> LedgerState {
-        guard data.count <= 50 * 1024 * 1024 else { throw LedgerError.invalid("备份不能超过50MB") }
-        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
-        let backup = try decoder.decode(Backup.self, from: data)
-        guard backup.app == "PocketLedger", backup.version == 1 else { throw LedgerError.invalid("备份来源或版本不受支持") }
-        try backup.data.validate(); return backup.data
-    }
-    // Same ID + different content is a conflict, never silently overwrite balances.
-    public static func restore(_ incoming: LedgerState, into current: LedgerState, mode: ImportMode) throws -> LedgerState {
-        try incoming.validate()
-        if mode == .replace { return incoming }
-        func merge<T: Identifiable & Equatable>(_ a: [T], _ b: [T]) throws -> [T] where T.ID: Hashable {
-            var result = a
-            for item in b {
-                if let existing = a.first(where: { $0.id == item.id }) {
-                    guard existing == item else { throw LedgerError.invalid("相同ID的数据发生冲突，请选择覆盖恢复或其他备份") }
-                } else { result.append(item) }
+    private static func decoder() -> JSONDecoder {
+        let d = JSONDecoder(); d.dateDecodingStrategy = .custom { decoder in
+            let c = try decoder.singleValueContainer(); let value = try c.decode(String.self)
+            let f = ISO8601DateFormatter()
+            if let dot = value.firstIndex(of: "."), value.hasSuffix("Z") {
+                let whole = String(value[..<dot]) + "Z"
+                let fraction = String(value[dot..<value.index(before: value.endIndex)])
+                if let date = f.date(from: whole), let part = Double("0" + fraction) { return date.addingTimeInterval(part) }
             }
-            return result
-        }
-        var result = current
-        result.books = try merge(current.books, incoming.books)
-        result.accounts = try merge(current.accounts, incoming.accounts)
-        result.entries = try merge(current.entries, incoming.entries)
-        result.loans = try merge(current.loans, incoming.loans)
-        result.budgets = try merge(current.budgets, incoming.budgets)
-        result.categories = Array(Set(current.categories + incoming.categories)).sorted()
-        try result.validate(); return result
+            if let date = f.date(from: value) { return date }
+            throw LedgerError.invalid("备份日期格式无效")
+        }; return d
+    }
+    public static func export(_ state: LedgerState) throws -> Data {
+        try state.validate(); return try encoder().encode(Backup(data: state))
+    }
+    public static func preview(_ data: Data) throws -> Backup {
+        guard !data.isEmpty, data.count <= 50 * 1024 * 1024 else { throw LedgerError.invalid("备份为空或超过50MB") }
+        let backup = try decoder().decode(Backup.self, from: data)
+        guard backup.format == "com.localbookkeeping.full-backup", backup.schemaVersion == 1, backup.currency == "CNY" else { throw LedgerError.invalid("备份格式、版本或币种不受支持") }
+        try backup.data.validate()
+        guard backup.accountPostings == backup.data.postings else { throw LedgerError.invalid("备份的资金过账与交易不一致") }
+        return backup
+    }
+    public static func decode(_ data: Data) throws -> LedgerState { try preview(data).data }
+    public static func restore(_ incoming: LedgerState, into current: LedgerState, mode: ImportMode) throws -> LedgerState {
+        try incoming.validate(); return incoming
     }
     public static func csv(_ state: LedgerState, entries: [Entry]? = nil) -> Data {
         func quote(_ value: String) -> String {
-            // Prevent spreadsheet formula execution on user-supplied text.
-            let dangerous = ["=", "+", "-", "@", "\t", "\r"].contains { value.trimmingCharacters(in: .whitespaces).hasPrefix($0) }
-            let safe = dangerous ? "'" + value : value
+            let first = value.trimmingCharacters(in: .whitespacesAndNewlines).first
+            let safe = first.map { "=+-@".contains($0) } == true || value.hasPrefix("\t") || value.hasPrefix("\r") ? "'" + value : value
             return "\"" + safe.replacingOccurrences(of: "\"", with: "\"\"") + "\""
         }
         let f = ISO8601DateFormatter()
+        let books = Dictionary(uniqueKeysWithValues: state.books.map { ($0.id, $0.name) })
+        let accounts = Dictionary(uniqueKeysWithValues: state.accounts.map { ($0.id, $0.name) })
         let rows = (entries ?? state.entries).sorted { $0.date > $1.date }.map { e in
-            [f.string(from: e.date), state.books.first { $0.id == e.bookID }?.name ?? "", e.kind.rawValue, e.category,
-             state.accounts.first { $0.id == e.accountID }?.name ?? "", state.accounts.first { $0.id == e.targetID }?.name ?? "",
-             NSDecimalNumber(decimal: Decimal(e.amount) / 100).stringValue, e.note].map(quote).joined(separator: ",")
+            let absolute = abs(e.amount)
+            let amount = (e.amount < 0 ? "-" : "") + "\(absolute / 100)." + String(format: "%02lld", absolute % 100)
+            return [f.string(from: e.date), e.kind.rawValue, books[e.bookID] ?? "", e.category, accounts[e.accountID] ?? "", e.targetID.flatMap { accounts[$0] } ?? "", amount, e.note, e.id.uuidString].map(quote).joined(separator: ",")
         }
-        return Data(("\u{FEFF}日期,账本,类型,分类,账户,转入账户,金额,备注\r\n" + rows.joined(separator: "\r\n")).utf8)
+        return Data(("\u{FEFF}日期,类型,账本,分类,转出账户,转入账户,金额(元),备注,交易ID\r\n" + rows.joined(separator: "\r\n")).utf8)
     }
 }

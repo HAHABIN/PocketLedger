@@ -32,7 +32,7 @@ public struct Book: Codable, Identifiable, Equatable {
     public var archived = false
     public init(name: String) { self.name = name }
 }
-public enum AccountKind: String, Codable, CaseIterable { case cash = "现金", bank = "银行卡", wallet = "支付账户", credit = "信用卡" }
+public enum AccountKind: String, Codable, CaseIterable { case cash = "现金", bank = "银行卡", wallet = "支付账户", credit = "信用卡", other = "其他资产", debt = "其他负债"; public var isDebt: Bool { self == .credit || self == .debt } }
 public struct Account: Codable, Identifiable, Equatable {
     public var id = UUID()
     public var name: String
@@ -40,9 +40,12 @@ public struct Account: Codable, Identifiable, Equatable {
     // Signed balance: negative means debt, including credit card debt.
     public var opening: Int64
     public var archived = false
+    public var includeInNetWorth: Bool? = true
+    public var icon: String? = "creditcard"
+    public var note: String? = ""
     public init(name: String, kind: AccountKind, opening: Int64 = 0) { self.name = name; self.kind = kind; self.opening = opening }
 }
-public enum EntryKind: String, Codable, CaseIterable { case expense = "支出", income = "收入", transfer = "转账", lend = "借出", borrow = "借入", collect = "收回借款", repay = "偿还借款", adjustment = "余额调整" }
+public enum EntryKind: String, Codable, CaseIterable { case expense = "支出", income = "收入", transfer = "转账", lend = "借出", borrow = "借入", collect = "收回借款", repay = "偿还借款", adjustment = "余额调整", creditRepayment = "信用卡还款" }
 public struct Entry: Codable, Identifiable, Equatable {
     public var id = UUID()
     public var bookID: UUID
@@ -54,9 +57,12 @@ public struct Entry: Codable, Identifiable, Equatable {
     public var category: String
     public var date: Date
     public var note: String
+    public var createdAt: Date?
+    public var updatedAt: Date?
     public init(bookID: UUID, accountID: UUID, kind: EntryKind, amount: Int64, category: String = "其他", date: Date = Date(), note: String = "", targetID: UUID? = nil, loanID: UUID? = nil) {
         self.bookID = bookID; self.accountID = accountID; self.kind = kind; self.amount = amount
         self.category = category; self.date = date; self.note = note; self.targetID = targetID; self.loanID = loanID
+        self.createdAt = Date(); self.updatedAt = self.createdAt
     }
 }
 public struct Loan: Codable, Identifiable, Equatable {
@@ -80,24 +86,21 @@ public struct LedgerState: Codable, Equatable {
     public var loans: [Loan] = []
     public var budgets: [Budget] = []
     public var categories = ["餐饮", "交通", "购物", "居住", "娱乐", "医疗", "工资", "奖金", "其他"]
+    public var settings: [String: String]? = [:]
     public var defaultBookID: UUID?
     public init() {}
     public static var initial: LedgerState {
         var s = LedgerState(); let b = Book(name: "日常账本"); s.books = [b]; s.defaultBookID = b.id
         s.accounts = [Account(name: "现金", kind: .cash)]; return s
     }
-    public func balance(_ id: UUID) -> Int64 {
-        guard let account = accounts.first(where: { $0.id == id }) else { return 0 }
-        return entries.reduce(account.opening) { total, e in
-            if e.accountID == id {
-                switch e.kind {
-                case .expense, .transfer, .lend, .repay: return total - e.amount
-                default: return total + e.amount
-                }
-            }
-            return e.kind == .transfer && e.targetID == id ? total + e.amount : total
-        }
+    // Signed postings: debt is negative here, displayed as positive amount owed in UI.
+    public var postings: [Posting] { entries.flatMap(BookkeepingService.postings) }
+    public var balances: [UUID: Int64] {
+        var result = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0.opening) })
+        for posting in postings { result[posting.accountID, default: 0] += posting.deltaCents }
+        return result
     }
+    public func balance(_ id: UUID) -> Int64 { balances[id, default: 0] }
     public func outstanding(_ id: UUID) -> Int64 {
         entries.filter { $0.loanID == id }.reduce(0) { total, e in
             total + ((e.kind == .lend || e.kind == .borrow) ? e.amount : -e.amount)
@@ -105,8 +108,8 @@ public struct LedgerState: Codable, Equatable {
     }
     public var receivable: Int64 { loans.filter(\.isLent).reduce(0) { $0 + outstanding($1.id) } }
     public var payable: Int64 { loans.filter { !$0.isLent }.reduce(0) { $0 + outstanding($1.id) } }
-    public var assets: Int64 { accounts.reduce(receivable) { $0 + max(0, balance($1.id)) } }
-    public var liabilities: Int64 { accounts.reduce(payable) { $0 + max(0, -balance($1.id)) } }
+    public var assets: Int64 { let values = balances; return accounts.filter { $0.includeInNetWorth != false }.reduce(receivable) { $0 + max(0, values[$1.id, default: 0]) } }
+    public var liabilities: Int64 { let values = balances; return accounts.filter { $0.includeInNetWorth != false }.reduce(payable) { $0 + max(0, -values[$1.id, default: 0]) } }
     public var netWorth: Int64 { assets - liabilities }
     public static func month(_ date: Date) -> String {
         let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.dateFormat = "yyyy-MM"; f.locale = Locale(identifier: "en_US_POSIX"); return f.string(from: date)
@@ -117,21 +120,25 @@ public struct LedgerState: Codable, Equatable {
         try require(entries.count <= 100_000 && accounts.count <= 1000 && books.count <= 1000 && loans.count <= 100_000 && budgets.count <= 120_000, "备份数据数量超过限制")
         try require(unique(books) && unique(accounts) && unique(entries) && unique(loans) && unique(budgets), "存在重复ID")
         try require(!books.isEmpty && books.contains { !$0.archived && $0.id == defaultBookID }, "默认账本必须存在且未归档")
-        try require(!accounts.isEmpty, "至少保留一个账户")
+        try require(accounts.contains { !$0.archived }, "至少保留一个启用的账户")
         try require(books.allSatisfy { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.name.count <= 60 }, "账本名称无效")
         try require(accounts.allSatisfy { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.name.count <= 60 && $0.opening >= -Money.limit && $0.opening <= Money.limit }, "账户无效")
-        try require(categories.count <= 200 && Set(categories).count == categories.count && !categories.isEmpty && categories.allSatisfy { !$0.isEmpty && $0.count <= 40 }, "分类无效")
+        try require(categories.count <= 200 && Set(categories).count == categories.count && !categories.isEmpty && categories.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 40 }, "分类无效")
         let bookIDs = Set(books.map(\.id)), accountIDs = Set(accounts.map(\.id))
         for e in entries {
             try require(bookIDs.contains(e.bookID) && accountIDs.contains(e.accountID), "交易引用了不存在的账本或账户")
             try require(e.date.timeIntervalSince1970.isFinite && e.note.count <= 2000 && e.category.count <= 40, "交易日期或备注无效")
             try require(e.amount >= -Money.limit && e.amount <= Money.limit && (e.kind == .adjustment || e.amount > 0), "交易金额无效")
-            if e.kind == .transfer {
+            if e.kind == .transfer || e.kind == .creditRepayment {
                 try require(e.targetID != e.accountID && e.targetID.map(accountIDs.contains) == true && e.loanID == nil, "转入转出账户必须不同且存在")
+                            let source = accounts.first { $0.id == e.accountID }!
+                let target = accounts.first { $0.id == e.targetID }!
+                try require(!source.kind.isDebt && (e.kind == .creditRepayment ? target.kind.isDebt : !target.kind.isDebt), "普通转账仅支持资产账户；偿还负债请选择还信用卡/负债")
             } else { try require(e.targetID == nil, "非转账交易不能包含转入账户") }
             let isLoan = [.lend, .borrow, .collect, .repay].contains(e.kind)
             if isLoan {
                 guard let loan = loans.first(where: { $0.id == e.loanID }) else { throw LedgerError.invalid("借贷关联不存在") }
+                try require(accounts.first { $0.id == e.accountID }?.kind.isDebt == false, "借贷本金请选择资产账户")
                 try require(loan.isLent ? [.lend, .collect].contains(e.kind) : [.borrow, .repay].contains(e.kind), "借贷方向不匹配")
             } else { try require(e.loanID == nil, "普通交易不能关联借贷") }
         }
@@ -147,5 +154,33 @@ public struct LedgerState: Codable, Equatable {
             try require(bookIDs.contains(budget.bookID) && budget.amount > 0 && budget.amount <= Money.limit && budget.month.range(of: #"^\d{4}-(0[1-9]|1[0-2])$"#, options: .regularExpression) != nil, "预算无效")
             try require(budgetKeys.insert("\(budget.bookID)-\(budget.month)").inserted, "同账本同月份预算重复")
         }
+    }
+}
+
+public struct Posting: Codable, Equatable, Identifiable {
+    public var id: String { transactionID.uuidString + ":" + accountID.uuidString }
+    public var transactionID: UUID
+    public var accountID: UUID
+    public var deltaCents: Int64
+}
+public enum BookkeepingService {
+    public static func postings(_ entry: Entry) -> [Posting] {
+        let outgoing: [EntryKind] = [.expense, .transfer, .creditRepayment, .lend, .repay]
+        var rows = [Posting(transactionID: entry.id, accountID: entry.accountID, deltaCents: outgoing.contains(entry.kind) ? -entry.amount : entry.amount)]
+        if let target = entry.targetID { rows.append(Posting(transactionID: entry.id, accountID: target, deltaCents: entry.amount)) }
+        return rows
+    }
+    public static func remove(_ entry: Entry, from state: inout LedgerState) throws {
+        if entry.kind == .lend || entry.kind == .borrow {
+            guard !state.entries.contains(where: { $0.loanID == entry.loanID && $0.id != entry.id }) else { throw LedgerError.invalid("请先删除关联还款记录") }
+            state.loans.removeAll { $0.id == entry.loanID }
+        }
+        state.entries.removeAll { $0.id == entry.id }
+    }
+    public static func adjust(accountID: UUID, target: Int64, reason: String, date: Date, state: inout LedgerState) throws {
+        guard let book = state.defaultBookID else { throw LedgerError.invalid("默认账本不存在") }
+        let delta = target - state.balance(accountID)
+        guard delta != 0 else { throw LedgerError.invalid("目标余额与当前余额相同") }
+        state.entries.append(Entry(bookID: book, accountID: accountID, kind: .adjustment, amount: delta, category: "余额校正", date: date, note: reason))
     }
 }

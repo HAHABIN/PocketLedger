@@ -13,7 +13,7 @@ final class LedgerCoreTests: XCTestCase {
         let a = s.accounts[0].id; s.accounts[0].opening = 10000
         let credit = Account(name: "信用卡", kind: .credit, opening: -5000); s.accounts.append(credit)
         let before = s.netWorth
-        s.entries.append(Entry(bookID: s.books[0].id, accountID: a, kind: .transfer, amount: 3000, targetID: credit.id))
+        s.entries.append(Entry(bookID: s.books[0].id, accountID: a, kind: .creditRepayment, amount: 3000, targetID: credit.id))
         try s.validate(); XCTAssertEqual(s.netWorth, before); XCTAssertEqual(s.balance(credit.id), -2000)
     }
     func testLoanAndPartialRepayment() throws {
@@ -30,9 +30,7 @@ final class LedgerCoreTests: XCTestCase {
         let s = LedgerState.initial
         let restored = try BackupService.decode(BackupService.export(s))
         XCTAssertEqual(s, restored)
-        XCTAssertEqual(try BackupService.restore(s, into: s, mode: .merge), s)
-        var conflict = s; conflict.accounts[0].opening = 100
-        XCTAssertThrowsError(try BackupService.restore(conflict, into: s, mode: .merge))
+        XCTAssertEqual(try BackupService.restore(s, into: s, mode: .replace), s)
     }
     func testDatabaseReopenAndFailedWrite() throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
@@ -47,5 +45,86 @@ final class LedgerCoreTests: XCTestCase {
         s.entries.append(Entry(bookID: s.books[0].id, accountID: s.accounts[0].id, kind: .transfer, amount: 100, targetID: s.accounts[0].id))
         XCTAssertThrowsError(try s.validate())
         s.entries[0].accountID = UUID(); XCTAssertThrowsError(try s.validate())
+    }
+}
+
+final class AcceptanceTests: XCTestCase {
+    func testFinancialScenarioAndCrossBook() throws {
+        var s = LedgerState.initial
+        s.accounts[0].opening = 100_000
+        let cash = s.accounts[0].id, book = s.books[0].id
+        let bank = Account(name: "银行", kind: .bank, opening: 200_000)
+        let card = Account(name: "信用卡", kind: .credit, opening: -30_000)
+        s.accounts += [bank, card]
+        XCTAssertEqual(s.assets, 300_000); XCTAssertEqual(s.liabilities, 30_000); XCTAssertEqual(s.netWorth, 270_000)
+        func add(_ kind: EntryKind, _ amount: Int64, _ account: UUID, target: UUID? = nil, loan: UUID? = nil) {
+            s.entries.append(Entry(bookID: book, accountID: account, kind: kind, amount: amount, targetID: target, loanID: loan))
+        }
+        add(.expense, 2_000, cash); XCTAssertEqual(s.netWorth, 268_000)
+        add(.transfer, 20_000, bank.id, target: cash); XCTAssertEqual(s.netWorth, 268_000)
+        add(.expense, 10_000, card.id); XCTAssertEqual(s.netWorth, 258_000)
+        add(.creditRepayment, 15_000, bank.id, target: card.id); XCTAssertEqual(s.netWorth, 258_000)
+        let lent = Loan(person: "朋友甲", isLent: true); s.loans.append(lent)
+        add(.lend, 30_000, cash, loan: lent.id)
+        add(.collect, 12_000, bank.id, loan: lent.id)
+        let borrowed = Loan(person: "朋友乙", isLent: false); s.loans.append(borrowed)
+        add(.borrow, 50_000, bank.id, loan: borrowed.id)
+        add(.repay, 20_000, bank.id, loan: borrowed.id)
+        try s.validate()
+        XCTAssertEqual(s.balance(cash), 88_000); XCTAssertEqual(s.balance(bank.id), 207_000)
+        XCTAssertEqual(s.balance(card.id), -25_000); XCTAssertEqual(s.receivable, 18_000); XCTAssertEqual(s.payable, 30_000)
+        XCTAssertEqual(s.netWorth, 258_000)
+        let family = Book(name: "家庭账本"); s.books.append(family)
+        let before = s.netWorth; s.entries[0].bookID = family.id
+        XCTAssertEqual(s.netWorth, before)
+        XCTAssertEqual(s.entries.filter { $0.bookID == family.id && $0.kind == .expense }.reduce(0) { $0 + $1.amount }, 2_000)
+        let data = try BackupService.export(s), restored = try BackupService.decode(data)
+        XCTAssertEqual(restored.netWorth, s.netWorth); XCTAssertEqual(restored.entries.count, 9)
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let repo = try SQLiteLedgerRepository(path: path); try repo.save(s)
+        XCTAssertEqual(try repo.load(), s)
+        var revised = s; revised.entries[0].amount = 3_000; try repo.save(revised)
+        XCTAssertEqual(try repo.load()?.netWorth, before - 1_000)
+        try BookkeepingService.remove(revised.entries[0], from: &revised); try repo.save(revised)
+        XCTAssertEqual(try repo.load()?.netWorth, before + 2_000)
+    }
+    func testTamperedPostingUnsupportedVersionAndCorruptFile() throws {
+        let data = try BackupService.export(.initial)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object["schemaVersion"] = 99
+        XCTAssertThrowsError(try BackupService.decode(JSONSerialization.data(withJSONObject: object)))
+        XCTAssertThrowsError(try BackupService.decode(Data("broken".utf8)))
+        XCTAssertThrowsError(try BackupService.decode(Data()))
+        var s = LedgerState.initial
+        s.entries.append(Entry(bookID: s.books[0].id, accountID: s.accounts[0].id, kind: .income, amount: 100))
+        object = try XCTUnwrap(JSONSerialization.jsonObject(with: BackupService.export(s)) as? [String: Any])
+        object["accountPostings"] = []
+        XCTAssertThrowsError(try BackupService.decode(JSONSerialization.data(withJSONObject: object)))
+    }
+    func testCSVInjectionQuotingAndDecimalPlaces() throws {
+        var s = LedgerState.initial
+        s.entries.append(Entry(bookID: s.books[0].id, accountID: s.accounts[0].id, kind: .income, amount: 1200, note: "=SUM(1,2)\n\"引号\""))
+        let csv = String(decoding: BackupService.csv(s), as: UTF8.self)
+        XCTAssertTrue(csv.hasPrefix("\u{FEFF}")); XCTAssertTrue(csv.contains("\"12.00\""))
+        XCTAssertTrue(csv.contains("\"'=SUM(1,2)\n\"\"引号\"\"\"")); XCTAssertTrue(csv.contains(s.entries[0].id.uuidString))
+    }
+    func testLoanDeletionAndAccountConstraints() throws {
+        var s = LedgerState.initial
+        let loan = Loan(person: "朋友", isLent: true); s.loans.append(loan)
+        let e = Entry(bookID: s.books[0].id, accountID: s.accounts[0].id, kind: .lend, amount: 100, loanID: loan.id)
+        s.entries.append(e)
+        let repayment = Entry(bookID: s.books[0].id, accountID: s.accounts[0].id, kind: .collect, amount: 20, loanID: loan.id)
+        s.entries.append(repayment)
+        XCTAssertThrowsError(try BookkeepingService.remove(e, from: &s))
+        try BookkeepingService.remove(repayment, from: &s); try BookkeepingService.remove(e, from: &s)
+        XCTAssertTrue(s.loans.isEmpty)
+        s.accounts[0].archived = true; XCTAssertThrowsError(try s.validate())
+    }
+    func testTargetBalanceAdjustment() throws {
+        var s = LedgerState.initial; s.accounts[0].opening = 1000
+        try BookkeepingService.adjust(accountID: s.accounts[0].id, target: 0, reason: "盘点", date: Date(), state: &s)
+        try s.validate(); XCTAssertEqual(s.balance(s.accounts[0].id), 0)
+        XCTAssertEqual(s.entries[0].amount, -1000); XCTAssertEqual(s.entries[0].kind, .adjustment)
     }
 }
