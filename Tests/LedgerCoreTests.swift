@@ -122,6 +122,11 @@ final class AcceptanceTests: XCTestCase {
         XCTAssertTrue(s.loans.isEmpty)
         s.accounts[0].archived = true; XCTAssertThrowsError(try s.validate())
     }
+    func testDebtTargetBalanceEntryParsing() throws {
+        XCTAssertEqual(try Money.parse("0", signed: false), 0)
+        XCTAssertEqual(try Money.parse("100.01", signed: false), 10_001)
+        XCTAssertThrowsError(try Money.parse("-100", signed: false))
+    }
     func testTargetBalanceAdjustment() throws {
         var s = LedgerState.initial; s.accounts[0].opening = 1000
         try BookkeepingService.adjust(accountID: s.accounts[0].id, target: 0, reason: "盘点", date: Date(), state: &s)
@@ -159,6 +164,22 @@ final class DatabaseSafetyTests: XCTestCase {
         }
         try migrator.migrate(connection)
         XCTAssertEqual(try SQLiteLedgerRepository(path: path).load(), s)
+    }
+    func testBudgetUpdatesAndDeletionRemainConsistent() throws {
+        let repo = try SQLiteLedgerRepository(path: ":memory:")
+        var state = LedgerState.initial
+        let bookID = try XCTUnwrap(state.defaultBookID)
+        state.budgets = [Budget(bookID: bookID, month: "2026-10", amount: 10_000)]
+        try repo.save(state)
+        state.entries.append(Entry(bookID: bookID, accountID: state.accounts[0].id, kind: .expense, amount: 100))
+        try repo.save(state)
+        XCTAssertEqual(try repo.load()?.budgets, state.budgets)
+        state.budgets[0].amount = 20_000
+        try repo.save(state)
+        XCTAssertEqual(try repo.load()?.budgets, state.budgets)
+        state.budgets.removeAll()
+        try repo.save(state)
+        XCTAssertEqual(try repo.load()?.budgets, [])
     }
     func testTwentyThousandRecordsAndAccountOrder() throws {
         let repo = try SQLiteLedgerRepository(path: ":memory:")
