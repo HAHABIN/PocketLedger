@@ -121,6 +121,7 @@ struct HomeView: View {
     @State private var month = Date()
     @State private var search = ""
     @State private var filtering = false
+    @State private var searchVisible = false
     @State private var account: UUID?
     @State private var kind: EntryKind?
     @State private var category: String?
@@ -137,11 +138,11 @@ struct HomeView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                HStack { BookPicker().labelsHidden().font(.headline); Spacer(); Button { filtering = true } label: { Image(systemName: "calendar") }.accessibilityLabel("日期筛选"); NavigationLink { SettingsView() } label: { Image(systemName: "gearshape") }.accessibilityLabel("设置") }.foregroundStyle(.primary)
-                VStack(spacing: 10) {
-                    HStack { Button { shift(-1) } label: { Image(systemName: "chevron.left") }; DatePicker(dayOnly ? "日期" : "月份", selection: $month, displayedComponents: .date).labelsHidden(); Spacer(); Button { shift(1) } label: { Image(systemName: "chevron.right") } }.font(.caption)
-                    GradientOverview(title: month.formatted(.dateTime.year().month()), items: [("本月收入", income), ("本月支出", expense), ("本月结余", income - expense)])
-                }
+                HStack { BookPicker().labelsHidden().font(.headline); Spacer(); Button { searchVisible.toggle() } label: { Image(systemName: "magnifyingglass") }.accessibilityLabel("搜索账单"); Button { filtering = true } label: { Image(systemName: "calendar") }.accessibilityLabel("日期筛选"); NavigationLink { SettingsView() } label: { Image(systemName: "gearshape") }.accessibilityLabel("设置") }.foregroundStyle(.primary)
+                if searchVisible { TextField("搜索分类、类型、账户、备注", text: $search).textFieldStyle(.roundedBorder).submitLabel(.search) }
+                GradientOverview(title: month.formatted(.dateTime.year().month()) + " ▾", items: [("本月收入", income), ("本月支出", expense), ("本月结余", income - expense)])
+                    .onTapGesture { filtering = true }
+                    .contextMenu { Button("上个月") { shift(-1) }; Button("下个月") { shift(1) }; Button("选择日期") { filtering = true } }
                 HStack(spacing: 8) {
                     ForEach(["餐饮", "交通", "购物", "娱乐", "更多"], id: \.self) { item in
                         Button { quick = item == "更多" ? store.state.categories.first : item } label: { VStack(spacing: 8) { DesignIcon(symbol: categoryIcon(item), color: categoryColor(item), size: 42); Text(item).font(.caption).foregroundStyle(.primary) }.frame(maxWidth: .infinity).frame(minHeight: 64) }.buttonStyle(.plain)
@@ -160,8 +161,8 @@ struct HomeView: View {
                 }
             }.padding(16)
         }.background(Color(uiColor: .systemGroupedBackground)).navigationTitle("轻松记账").navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $search, prompt: "搜索分类、类型、账户、备注")
         .sheet(isPresented: $filtering) { NavigationStack { Form {
+            DatePicker("统计日期", selection: $month, displayedComponents: .date)
             Toggle("只查看选中日期", isOn: $dayOnly)
             Picker("类型", selection: $kind) { Text("全部").tag(EntryKind?.none); ForEach(EntryKind.allCases, id: \.self) { Text($0.rawValue).tag(Optional($0)) } }
             Picker("账户", selection: $account) { Text("全部").tag(UUID?.none); ForEach(store.state.accounts) { Text($0.name).tag(Optional($0.id)) } }
