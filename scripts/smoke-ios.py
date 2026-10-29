@@ -28,7 +28,7 @@ for page, flag in [('home', None), ('reports', '--预览报表'), ('assets', '--
     if flag:
         args.append(flag)
     run(*args)
-    time.sleep(3)
+    time.sleep(15)
     image = pathlib.Path('screenshots') / (page + '.png')
     run('xcrun', 'simctl', 'io', device['udid'], 'screenshot', str(image))
     run('sips', '-Z', '800', str(image))
