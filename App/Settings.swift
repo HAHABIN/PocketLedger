@@ -93,14 +93,14 @@ struct SettingsView: View {
                 Section { Text("将替换当前全部数据。执行前会在本机保存一次恢复点，失败时保留原数据。").foregroundStyle(Color.expense); Button("覆盖恢复…", role: .destructive) { confirm = true } }
             }
         }.navigationTitle("恢复预览").toolbar { Button("取消") { preview = false; incoming = nil } }
-        .confirmationDialog("确认用此备份替换全部账本、账户和交易？", isPresented: $confirm, titleVisibility: .visible) { Button("确认覆盖", role: .destructive) { restore() } }
+        .confirmationDialog("确认用此备份替换全部账本、账户和交易？", isPresented: $confirm, titleVisibility: .visible) { Button("确认覆盖", role: .destructive) { Task { await restore() } } }
         } }
         .sheet(isPresented: $clear) { NavigationStack { Form {
             Text("此操作删除全部账本、账户、交易、借贷和上次恢复点，重建空白日常账本。请先导出完整备份。无法撤销。")
             TextField("输入「清空全部数据」", text: $clearWord)
             Button("继续清空…", role: .destructive) { clearConfirm = true }.disabled(clearWord != "清空全部数据")
         }.navigationTitle("清空全部数据").toolbar { Button("取消") { clear = false; clearWord = "" } }
-        .confirmationDialog("确定永久清空？", isPresented: $clearConfirm, titleVisibility: .visible) { Button("永久清空", role: .destructive) { store.attempt { try store.clearAll(); clear = false; clearWord = ""; message = "数据已清空" } } }
+        .confirmationDialog("确定永久清空？", isPresented: $clearConfirm, titleVisibility: .visible) { Button("永久清空", role: .destructive) { Task { await store.attemptAsync { try await store.clearAll(); clear = false; clearWord = ""; message = "数据已清空" } } } }
         } }
         .alert("完成", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) { Button("知道了") { message = nil } } message: { Text(message ?? "") }
     }
@@ -110,7 +110,7 @@ struct SettingsView: View {
             if exportJSON {
                 var state = store.state
                 if state.settings == nil { state.settings = [:] }
-                state.settings?["hideAmounts"] = String(hideAmounts); state.settings?["appLock"] = String(lock)
+                state.settings?["currentBookID"] = store.bookID?.uuidString; state.settings?["hideAmounts"] = String(hideAmounts); state.settings?["appLock"] = String(lock)
                 document = ExportDocument(data: try BackupService.export(state)); type = .json
             } else {
                 guard start <= end else { throw LedgerError.invalid("开始日期不能晚于结束日期") }
@@ -120,9 +120,9 @@ struct SettingsView: View {
             exporting = true
         }
     }
-    func restore() {
-        store.attempt {
-            guard let incoming else { return }; try store.restore(incoming.data, mode: .replace)
+    func restore() async {
+        await store.attemptAsync {
+            guard let incoming else { return }; try await store.restore(incoming.data, mode: .replace)
             if let hidden = incoming.data.settings?["hideAmounts"] { hideAmounts = hidden == "true" }
             if let locked = incoming.data.settings?["appLock"] { lock = locked == "true" }
             self.incoming = nil; preview = false; message = "恢复完成，所有页面已刷新"
@@ -136,14 +136,14 @@ struct CategoriesView: View {
         List {
             Section("启用分类") {
                 ForEach(store.state.categories, id: \.self) { Text($0) }
-                .onMove { offsets, destination in store.perform { $0.categories.move(fromOffsets: offsets, toOffset: destination) } }
-                .onDelete { offsets in store.perform { s in
+                .onMove { offsets, destination in Task { await store.perform { $0.categories.move(fromOffsets: offsets, toOffset: destination) } } }
+                .onDelete { offsets in Task { await store.perform { s in
                     let names = offsets.map { s.categories[$0] }
                     guard !s.entries.contains(where: { names.contains($0.category) && ($0.kind == .expense || $0.kind == .income) }) else { throw LedgerError.invalid("历史交易正在使用此分类，不能删除") }
                     s.categories.remove(atOffsets: offsets)
-                } }
+                } } }
             }
-            Section("新增分类") { TextField("分类名称", text: $name); Button("添加") { if store.perform({ $0.categories.append(name.trimmingCharacters(in: .whitespacesAndNewlines)) }) { name = "" } } }
+            Section("新增分类") { TextField("分类名称", text: $name); Button("添加") { Task { if await store.perform({ $0.categories.append(name.trimmingCharacters(in: .whitespacesAndNewlines)) }) { name = "" } } } }
         }.navigationTitle("分类管理").toolbar { EditButton() }
     }
 }

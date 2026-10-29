@@ -7,8 +7,7 @@ public struct Backup: Codable {
     public var currency = "CNY"
     public var appVersion = "1.0.0"
     public var data: LedgerState
-    public var accountPostings: [Posting]
-    public init(data: LedgerState) { self.data = data; accountPostings = data.postings }
+    public init(data: LedgerState) { self.data = data }
 }
 public enum ImportMode { case replace }
 public enum BackupService {
@@ -40,10 +39,11 @@ public enum BackupService {
     }
     public static func preview(_ data: Data) throws -> Backup {
         guard !data.isEmpty, data.count <= 50 * 1024 * 1024 else { throw LedgerError.invalid("备份为空或超过50MB") }
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let payload = object?["data"] as? [String: Any], payload["accountPostings"] != nil, payload["transactions"] != nil else { throw LedgerError.invalid("备份缺少交易或资金过账") }
         let backup = try decoder().decode(Backup.self, from: data)
         guard backup.format == "com.localbookkeeping.full-backup", backup.schemaVersion == 1, backup.currency == "CNY" else { throw LedgerError.invalid("备份格式、版本或币种不受支持") }
         try backup.data.validate()
-        guard backup.accountPostings == backup.data.postings else { throw LedgerError.invalid("备份的资金过账与交易不一致") }
         return backup
     }
     public static func decode(_ data: Data) throws -> LedgerState { try preview(data).data }

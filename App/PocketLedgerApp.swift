@@ -19,7 +19,7 @@ extension Color {
             }.tint(.brand)
         }
     }
-    private func open() { do { store = try Store(); failure = nil } catch { failure = error.localizedDescription } }
+    private func open() { Task { do { store = try await Store.open(); failure = nil } catch { failure = error.localizedDescription } } }
 }
 struct RootView: View {
     @EnvironmentObject var store: Store
@@ -43,6 +43,7 @@ struct RootView: View {
             .sheet(isPresented: $add) { EntryEditor() }
             .sheet(isPresented: Binding(get: { !onboarded }, set: { if !$0 { onboarded = true } })) { onboarding }
             .alert("操作提示", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) { Button("知道了") { store.error = nil } } message: { Text(store.error ?? "") }
+            if store.saving { Color.black.opacity(0.1).ignoresSafeArea(); ProgressView("正在保存…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)) }
             if (appLock && !unlocked) || phase != .active {
                 Color(uiColor: .systemBackground).ignoresSafeArea()
                 VStack(spacing: 24) {

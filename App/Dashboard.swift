@@ -84,7 +84,7 @@ struct TransactionDetail: View {
                 Button("删除记录", role: .destructive) { confirm = true }
             }
         }.navigationTitle("交易详情").sheet(isPresented: $edit) { if let entry { EntryEditor(existing: entry) } }
-        .confirmationDialog("删除交易并重新计算账户余额？借贷本金有关联还款时不能直接删除。", isPresented: $confirm, titleVisibility: .visible) { Button("删除", role: .destructive) { if let entry, store.perform({ try BookkeepingService.remove(entry, from: &$0) }) { dismiss() } } }
+        .confirmationDialog("删除交易并重新计算账户余额？借贷本金有关联还款时不能直接删除。", isPresented: $confirm, titleVisibility: .visible) { Button("删除", role: .destructive) { Task { if let entry, await store.perform({ try BookkeepingService.remove(entry, from: &$0) }) { dismiss() } } } }
     }
 }
 struct HomeView: View {
@@ -210,3 +210,5 @@ struct ReportsView: View {
     }
     func shift(_ direction: Int) { date = Calendar.current.date(byAdding: period == 0 ? .weekOfYear : period == 1 ? .month : .year, value: direction, to: date) ?? date }
 }
+
+#Preview("首页 · 示例数据") { NavigationStack { HomeView() }.environmentObject(Store.preview) }

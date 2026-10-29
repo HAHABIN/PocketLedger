@@ -61,7 +61,7 @@ struct EntryEditor: View {
                 }
                 if let localError { Text(localError).foregroundStyle(Color.expense) }
             }.navigationTitle(existing == nil ? "记一笔" : "编辑交易")
-                .safeAreaInset(edge: .bottom) { Button("保存这笔记录", action: save).buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity).padding().background(.regularMaterial) }
+                .safeAreaInset(edge: .bottom) { Button("保存这笔记录", action: { Task { await save() } }).buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity).padding().background(.regularMaterial) }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { if baseline != fingerprint { discard = true } else { dismiss() } } }
                     ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完成") { amountFocused = false } }
@@ -84,11 +84,11 @@ struct EntryEditor: View {
         }
         baseline = fingerprint
     }
-    func save() {
+    func save() async {
         do {
             let cents = try Money.parse(amount, signed: kind == .adjustment)
             guard let book, let account else { throw LedgerError.invalid("请选择账本和账户") }
-            if store.perform({ s in
+            if await store.perform({ s in
                 var loanID = existing?.loanID ?? loan?.id
                 if kind == .lend || kind == .borrow {
                     if let id = loanID, let i = s.loans.firstIndex(where: { $0.id == id }) { s.loans[i].person = person; s.loans[i].dueDate = hasDue ? due : nil }
@@ -127,7 +127,7 @@ struct AssetsView: View {
                 NavigationLink { LoansView(isLent: false) } label: { HStack { Text("我借入 · 待偿还"); Spacer(); MoneyText(amount: store.state.payable) } }
             }
             Button("添加资金账户", systemImage: "plus.circle") { add = true }
-        }.navigationTitle("我的资产").toolbar { Button("转账") { transfer = true } }
+        }.navigationTitle("我的资产").toolbar { EditButton(); Button("转账") { transfer = true } }
         .sheet(isPresented: $add) { AccountEditor() }
         .sheet(isPresented: $transfer) { EntryEditor(initialKind: .transfer) }
         .sheet(isPresented: $repayment) { EntryEditor(initialKind: .creditRepayment) }
@@ -140,11 +140,11 @@ struct AssetsView: View {
                 HStack { Label(account.name + (account.archived ? " · 已归档" : ""), systemImage: account.icon ?? "creditcard"); Spacer(); MoneyText(amount: debt ? -store.state.balance(account.id) : store.state.balance(account.id)) }
             }
         }.onMove { indices, destination in
-            store.perform { s in
+            Task { await store.perform { s in
                 var reordered = accounts; reordered.move(fromOffsets: indices, toOffset: destination)
                 let ids = Set(accounts.map(\.id)); var iterator = reordered.makeIterator()
                 s.accounts = s.accounts.map { ids.contains($0.id) ? iterator.next()! : $0 }
-            }
+            } }
         }
     }
 }
@@ -166,7 +166,7 @@ struct AccountDetail: View {
                 if !account.kind.isDebt && store.state.balance(id) < 0 { Label("账户出现负余额，请核对流水或余额", systemImage: "exclamationmark.triangle").foregroundStyle(Color.expense) }
                 Section("账户设置") {
                     Button("编辑名称、图标和统计设置") { edit = true }
-                    Button(account.archived ? "重新启用" : "归档账户") { store.perform { s in if let i = s.accounts.firstIndex(where: { $0.id == id }) { s.accounts[i].archived.toggle() } } }
+                    Button(account.archived ? "重新启用" : "归档账户") { Task { await store.perform { s in if let i = s.accounts.firstIndex(where: { $0.id == id }) { s.accounts[i].archived.toggle() } } } }
                     Button(account.kind.isDebt ? "偿还负债" : "账户转账") { transfer = true }
                     if !store.state.entries.contains(where: { $0.accountID == id || $0.targetID == id }) { Button("删除空账户", role: .destructive) { deletion = true } }
                 }
@@ -174,10 +174,10 @@ struct AccountDetail: View {
                     TextField(account.kind.isDebt ? "目标欠款金额（元）" : "目标余额（元，可负数）", text: $adjustment)
                     TextField("校正原因", text: $reason)
                     DatePicker("校正日期", selection: $date)
-                    Button("生成校正记录") { store.attempt {
+                    Button("生成校正记录") { Task { await store.attemptAsync {
                         let value = try Money.parse(adjustment, signed: true)
-                        if store.perform({ try BookkeepingService.adjust(accountID: id, target: account.kind.isDebt ? -value : value, reason: reason, date: date, state: &$0) }) { adjustment = ""; reason = "" }
-                    } }
+                        if await store.perform({ try BookkeepingService.adjust(accountID: id, target: account.kind.isDebt ? -value : value, reason: reason, date: date, state: &$0) }) { adjustment = ""; reason = "" }
+                    } } }
                 }
                 Section("账户流水") { TransactionRows(entries: store.entries(book: nil, account: id)) }
             }
@@ -185,7 +185,7 @@ struct AccountDetail: View {
         .toolbar { EditButton() }
         .sheet(isPresented: $edit) { AccountEditor(existing: account) }
         .sheet(isPresented: $transfer) { EntryEditor(initialKind: account?.kind.isDebt == true ? .creditRepayment : .transfer, initialAccount: account?.kind.isDebt == true ? nil : id) }
-        .confirmationDialog("删除没有交易的账户？", isPresented: $deletion, titleVisibility: .visible) { Button("删除", role: .destructive) { if store.perform({ $0.accounts.removeAll { $0.id == id } }) { dismiss() } } }
+        .confirmationDialog("删除没有交易的账户？", isPresented: $deletion, titleVisibility: .visible) { Button("删除", role: .destructive) { Task { if await store.perform({ $0.accounts.removeAll { $0.id == id } }) { dismiss() } } } }
     }
 }
 struct AccountEditor: View {
@@ -213,15 +213,15 @@ struct AccountEditor: View {
             if let localError { Text(localError).foregroundStyle(Color.expense) }
         }.navigationTitle(existing == nil ? "新增账户" : "编辑账户").toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-            ToolbarItem(placement: .confirmationAction) { Button("保存") { save() } }
+            ToolbarItem(placement: .confirmationAction) { Button("保存") { Task { await save() } } }
         }.onAppear { if let existing { name = existing.name; kind = existing.kind; included = existing.includeInNetWorth != false; icon = existing.icon ?? "creditcard"; note = existing.note ?? "" } }
         }
     }
-    func save() {
+    func save() async {
         do {
             let value = existing == nil ? try Money.parse(balance, signed: true) : 0
             guard !kind.isDebt || value >= 0 else { throw LedgerError.invalid("欠款请输入正数；没有欠款请输入0") }
-            if store.perform({ s in
+            if await store.perform({ s in
                 var item = existing ?? Account(name: name, kind: kind, opening: kind.isDebt ? -value : value)
                 item.name = name; item.includeInNetWorth = included; item.icon = icon; item.note = note
                 if let i = s.accounts.firstIndex(where: { $0.id == item.id }) { s.accounts[i] = item } else { s.accounts.append(item) }
@@ -282,13 +282,13 @@ struct BooksView: View {
     @State private var name = ""
     var body: some View {
         List {
-            Section("创建账本") { TextField("账本名称", text: $name); Button("创建") { if store.perform({ $0.books.append(Book(name: name)) }) { name = "" } } }
+            Section("创建账本") { TextField("账本名称", text: $name); Button("创建") { Task { await store.perform { $0.books.append(Book(name: name)) }; if store.error == nil { name = "" } } } }
             Section("全部账本") {
                 ForEach(store.state.books) { book in NavigationLink { BookDetail(id: book.id) } label: {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack { Label(book.name, systemImage: "book.closed"); Spacer(); Text(book.archived ? "已归档" : book.id == store.bookID ? "当前" : book.id == store.state.defaultBookID ? "默认" : "").font(.caption).foregroundStyle(Color.brand) }
                         let rows = store.entries(book: book.id)
-                        HStack { Text("\(rows.count)笔"); Spacer(); Text("收 " + Money.format(rows.filter { $0.kind == .income }.reduce(0) { $0 + $1.amount })); Text("支 " + Money.format(rows.filter { $0.kind == .expense }.reduce(0) { $0 + $1.amount })) }.font(.caption).foregroundStyle(.secondary)
+                        HStack { Text("\(rows.count)笔"); Spacer(); Text("收"); MoneyText(amount: rows.filter { $0.kind == .income }.reduce(0) { $0 + $1.amount }); Text("支"); MoneyText(amount: rows.filter { $0.kind == .expense }.reduce(0) { $0 + $1.amount }) }.font(.caption).foregroundStyle(.secondary)
                     }.padding(.vertical, 8)
                 } }
             }
@@ -308,20 +308,20 @@ struct BookDetail: View {
         List {
             Section("账本设置") {
                 TextField("名称", text: $name)
-                Button("保存名称") { store.perform { s in if let i = s.books.firstIndex(where: { $0.id == id }) { s.books[i].name = name } } }
+                Button("保存名称") { Task { await store.perform { s in if let i = s.books.firstIndex(where: { $0.id == id }) { s.books[i].name = name } } } }
                 Button("切换到此账本") { store.bookID = id }.disabled(archived)
-                Button("设为默认") { store.perform { $0.defaultBookID = id } }.disabled(archived)
-                Button(archived ? "取消归档" : "归档账本") { store.perform { s in if let i = s.books.firstIndex(where: { $0.id == id }) { s.books[i].archived.toggle() } } }.disabled(id == store.state.defaultBookID)
+                Button("设为默认") { Task { await store.perform { $0.defaultBookID = id } } }.disabled(archived)
+                Button(archived ? "取消归档" : "归档账本") { Task { await store.perform { s in if let i = s.books.firstIndex(where: { $0.id == id }) { s.books[i].archived.toggle() } } } }.disabled(id == store.state.defaultBookID)
             }
             Section("月度预算") {
                 DatePicker("月份", selection: $date, displayedComponents: .date)
                 TextField("预算金额（元）", text: $budget).keyboardType(.decimalPad)
-                Button("保存预算") { store.attempt { let value = try Money.parse(budget); store.perform { s in s.budgets.removeAll { $0.bookID == id && $0.month == LedgerState.month(date) }; s.budgets.append(Budget(bookID: id, month: LedgerState.month(date), amount: value)) } } }
-                Button("移除此月预算") { store.perform { $0.budgets.removeAll { $0.bookID == id && $0.month == LedgerState.month(date) } } }
+                Button("保存预算") { Task { await store.attemptAsync { let value = try Money.parse(budget); await store.perform { s in s.budgets.removeAll { $0.bookID == id && $0.month == LedgerState.month(date) }; s.budgets.append(Budget(bookID: id, month: LedgerState.month(date), amount: value)) } } } }
+                Button("移除此月预算") { Task { await store.perform { $0.budgets.removeAll { $0.bookID == id && $0.month == LedgerState.month(date) } } } }
             }
             Section("账本全部交易") { TransactionRows(entries: store.entries(book: id)) }
             Button("删除空账本", role: .destructive) { confirm = true }.disabled(id == store.state.defaultBookID)
         }.navigationTitle("账本详情").onAppear { name = store.state.books.first { $0.id == id }?.name ?? "" }
-            .confirmationDialog("仅允许删除没有交易的非默认账本", isPresented: $confirm) { Button("删除", role: .destructive) { if store.perform({ s in guard !s.entries.contains(where: { $0.bookID == id }) else { throw LedgerError.invalid("账本存在交易，请归档保留历史数据") }; s.books.removeAll { $0.id == id }; s.budgets.removeAll { $0.bookID == id } }) { dismiss() } } }
+            .confirmationDialog("仅允许删除没有交易的非默认账本", isPresented: $confirm) { Button("删除", role: .destructive) { Task { if await store.perform({ s in guard !s.entries.contains(where: { $0.bookID == id }) else { throw LedgerError.invalid("账本存在交易，请归档保留历史数据") }; s.books.removeAll { $0.id == id }; s.budgets.removeAll { $0.bookID == id } }) { dismiss() } } } }
     }
 }

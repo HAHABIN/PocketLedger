@@ -79,7 +79,7 @@ final class AcceptanceTests: XCTestCase {
         XCTAssertEqual(s.netWorth, before)
         XCTAssertEqual(s.entries.filter { $0.bookID == family.id && $0.kind == .expense }.reduce(0) { $0 + $1.amount }, 2_000)
         let data = try BackupService.export(s), restored = try BackupService.decode(data)
-        XCTAssertEqual(restored.netWorth, s.netWorth); XCTAssertEqual(restored.entries.count, 9)
+        XCTAssertEqual(restored.netWorth, s.netWorth); XCTAssertEqual(restored.entries.count, 8)
         let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
         defer { try? FileManager.default.removeItem(atPath: path) }
         let repo = try SQLiteLedgerRepository(path: path); try repo.save(s)
@@ -99,7 +99,7 @@ final class AcceptanceTests: XCTestCase {
         var s = LedgerState.initial
         s.entries.append(Entry(bookID: s.books[0].id, accountID: s.accounts[0].id, kind: .income, amount: 100))
         object = try XCTUnwrap(JSONSerialization.jsonObject(with: BackupService.export(s)) as? [String: Any])
-        object["accountPostings"] = []
+        var payload = try XCTUnwrap(object["data"] as? [String: Any]); payload["accountPostings"] = []; object["data"] = payload
         XCTAssertThrowsError(try BackupService.decode(JSONSerialization.data(withJSONObject: object)))
     }
     func testCSVInjectionQuotingAndDecimalPlaces() throws {

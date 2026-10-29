@@ -1,11 +1,16 @@
 name: iOS
 on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
 jobs:
   build:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      - name: Toolchain
+        run: xcodebuild -version
       - name: Core tests
         run: swift test
       - name: iOS simulator build
+        if: ${{ !cancelled() }}
         run: xcodebuild -project PocketLedger.xcodeproj -scheme PocketLedger -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build

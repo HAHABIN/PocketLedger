@@ -89,6 +89,27 @@ public struct LedgerState: Codable, Equatable {
     public var settings: [String: String]? = [:]
     public var defaultBookID: UUID?
     public init() {}
+    enum CodingKeys: String, CodingKey { case books, accounts, transactions, entries, loans, budgets, categories, defaultBookID, settings, accountPostings }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        books = try c.decode([Book].self, forKey: .books)
+        accounts = try c.decode([Account].self, forKey: .accounts)
+        entries = try c.decodeIfPresent([Entry].self, forKey: .transactions) ?? c.decodeIfPresent([Entry].self, forKey: .entries) ?? []
+        loans = try c.decode([Loan].self, forKey: .loans)
+        budgets = try c.decode([Budget].self, forKey: .budgets)
+        categories = try c.decode([String].self, forKey: .categories)
+        defaultBookID = try c.decodeIfPresent(UUID.self, forKey: .defaultBookID)
+        settings = try c.decodeIfPresent([String: String].self, forKey: .settings)
+        if let declared = try c.decodeIfPresent([Posting].self, forKey: .accountPostings), declared != postings { throw LedgerError.invalid("资金过账与交易不一致") }
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(books, forKey: .books); try c.encode(accounts, forKey: .accounts)
+        try c.encode(entries, forKey: .transactions); try c.encode(loans, forKey: .loans)
+        try c.encode(budgets, forKey: .budgets); try c.encode(categories, forKey: .categories)
+        try c.encodeIfPresent(defaultBookID, forKey: .defaultBookID); try c.encodeIfPresent(settings, forKey: .settings)
+        try c.encode(postings, forKey: .accountPostings)
+    }
     public static var initial: LedgerState {
         var s = LedgerState(); let b = Book(name: "日常账本"); s.books = [b]; s.defaultBookID = b.id
         s.accounts = [Account(name: "现金", kind: .cash)]; return s
@@ -125,28 +146,32 @@ public struct LedgerState: Codable, Equatable {
         try require(accounts.allSatisfy { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.name.count <= 60 && $0.opening >= -Money.limit && $0.opening <= Money.limit }, "账户无效")
         try require(categories.count <= 200 && Set(categories).count == categories.count && !categories.isEmpty && categories.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 40 }, "分类无效")
         let bookIDs = Set(books.map(\.id)), accountIDs = Set(accounts.map(\.id))
+        let accountMap = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })
+        let loanMap = Dictionary(uniqueKeysWithValues: loans.map { ($0.id, $0) })
+        let loanEntries = Dictionary(grouping: entries.filter { $0.loanID != nil }, by: { $0.loanID! })
         for e in entries {
             try require(bookIDs.contains(e.bookID) && accountIDs.contains(e.accountID), "交易引用了不存在的账本或账户")
-            try require(e.date.timeIntervalSince1970.isFinite && e.note.count <= 2000 && e.category.count <= 40, "交易日期或备注无效")
+            try require((-62_135_596_800...253_402_300_799).contains(e.date.timeIntervalSince1970) && e.note.count <= 2000 && e.category.count <= 40, "交易日期或备注无效")
             try require(e.amount >= -Money.limit && e.amount <= Money.limit && (e.kind == .adjustment || e.amount > 0), "交易金额无效")
             if e.kind == .transfer || e.kind == .creditRepayment {
                 try require(e.targetID != e.accountID && e.targetID.map(accountIDs.contains) == true && e.loanID == nil, "转入转出账户必须不同且存在")
-                            let source = accounts.first { $0.id == e.accountID }!
-                let target = accounts.first { $0.id == e.targetID }!
+                            let source = accountMap[e.accountID]!
+                let target = e.targetID.flatMap { accountMap[$0] }!
                 try require(!source.kind.isDebt && (e.kind == .creditRepayment ? target.kind.isDebt : !target.kind.isDebt), "普通转账仅支持资产账户；偿还负债请选择还信用卡/负债")
             } else { try require(e.targetID == nil, "非转账交易不能包含转入账户") }
             let isLoan = [.lend, .borrow, .collect, .repay].contains(e.kind)
             if isLoan {
-                guard let loan = loans.first(where: { $0.id == e.loanID }) else { throw LedgerError.invalid("借贷关联不存在") }
-                try require(accounts.first { $0.id == e.accountID }?.kind.isDebt == false, "借贷本金请选择资产账户")
+                guard let loan = e.loanID.flatMap({ loanMap[$0] }) else { throw LedgerError.invalid("借贷关联不存在") }
+                try require(accountMap[e.accountID]?.kind.isDebt == false, "借贷本金请选择资产账户")
                 try require(loan.isLent ? [.lend, .collect].contains(e.kind) : [.borrow, .repay].contains(e.kind), "借贷方向不匹配")
             } else { try require(e.loanID == nil, "普通交易不能关联借贷") }
         }
         for loan in loans {
+            try require(loan.dueDate.map { (-62_135_596_800...253_402_300_799).contains($0.timeIntervalSince1970) } ?? true, "借贷到期日无效")
             try require(!loan.person.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && loan.person.count <= 60, "借贷对象无效")
-            let linked = entries.filter { $0.loanID == loan.id }
+            let linked = loanEntries[loan.id] ?? []
             let principal = linked.filter { $0.kind == .lend || $0.kind == .borrow }
-            try require(principal.count == 1 && outstanding(loan.id) >= 0, "借贷本金缺失、重复或还款超过本金")
+            try require(principal.count == 1 && linked.reduce(Int64(0), { $0 + (($1.kind == .lend || $1.kind == .borrow) ? $1.amount : -$1.amount) }) >= 0, "借贷本金缺失、重复或还款超过本金")
             try require(linked.allSatisfy { $0.date >= principal[0].date }, "还款日期不能早于借款日期")
         }
         var budgetKeys = Set<String>()
