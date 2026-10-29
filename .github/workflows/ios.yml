@@ -16,3 +16,5 @@ jobs:
         run: xcodebuild -quiet -project PocketLedger.xcodeproj -scheme PocketLedger -sdk iphonesimulator -configuration Debug -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
       - name: Simulator launch smoke test
         run: python3 scripts/smoke-ios.py
+      - name: Fictional UI board
+        run: swift scripts/render-demo-board.swift
