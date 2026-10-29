@@ -7,7 +7,7 @@ import LedgerCore
     @Published var bookID: UUID? {
         didSet {
             // 界面选择单独保存，避免切换账本时重写财务记录。
-            UserDefaults.standard.set(bookID?.uuidString ?? "all", forKey: "currentBookID")
+            if !isDemonstration { UserDefaults.standard.set(bookID?.uuidString ?? "all", forKey: "currentBookID") }
         }
     }
     @Published var error: String?
@@ -15,8 +15,12 @@ import LedgerCore
     @Published private(set) var readingBackup = false
     let isDemonstration: Bool
     private let repository: SQLiteLedgerRepository
+    private let recoveryDirectory: URL
     private init(repository: SQLiteLedgerRepository, state: LedgerState, isDemonstration: Bool = false) {
         self.repository = repository; self.state = state; self.isDemonstration = isDemonstration
+        recoveryDirectory = isDemonstration
+            ? FileManager.default.temporaryDirectory.appendingPathComponent("PocketLedgerDemo-" + UUID().uuidString)
+            : FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let saved = UserDefaults.standard.string(forKey: "currentBookID")
         bookID = saved == "all" ? nil : saved.flatMap(UUID.init(uuidString:)) ?? state.defaultBookID
         if let bookID, !state.books.contains(where: { $0.id == bookID && !$0.archived }) { self.bookID = state.defaultBookID }
@@ -58,10 +62,9 @@ import LedgerCore
     func clearAll() async throws {
         guard !saving else { throw LedgerError.invalid("正在保存，请稍后再试") }
         saving = true; defer { saving = false }
-        let repository = repository, initial = LedgerState.initial
+        let repository = repository, initial = LedgerState.initial, directory = recoveryDirectory
         try await Task.detached(priority: .userInitiated) {
-            let dir = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            let previous = dir.appendingPathComponent("before-restore.json")
+            let previous = directory.appendingPathComponent("before-restore.json")
             if FileManager.default.fileExists(atPath: previous.path) { try FileManager.default.removeItem(at: previous) }
             try repository.save(initial)
         }.value
@@ -70,15 +73,17 @@ import LedgerCore
     func restore(_ incoming: LedgerState, mode: ImportMode) async throws {
         guard !saving else { throw LedgerError.invalid("正在保存，请稍后再试") }
         saving = true; defer { saving = false }
-        let repository = repository, current = state
+        let repository = repository, current = state, directory = recoveryDirectory
         let next = try await Task.detached(priority: .userInitiated) {
             let next = try BackupService.restore(incoming, into: current, mode: mode)
             let backup = try BackupService.export(current)
-            let dir = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            try backup.write(to: dir.appendingPathComponent("before-restore.json"), options: [.atomic, .completeFileProtection])
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try backup.write(to: directory.appendingPathComponent("before-restore.json"), options: [.atomic, .completeFileProtection])
             try repository.save(next); return next
         }.value
-        state = next; bookID = next.settings?["currentBookID"].flatMap(UUID.init(uuidString:)) ?? next.defaultBookID
+        state = next
+        let selected = next.settings?["currentBookID"]
+        bookID = selected == "all" ? nil : selected.flatMap(UUID.init(uuidString:)) ?? next.defaultBookID
     }
     func stageBackup(_ url: URL) async {
         guard !saving && !readingBackup && pendingBackup == nil else { error = "请先完成或取消当前备份操作"; return }
@@ -109,7 +114,6 @@ import LedgerCore
     }
     #endif
     func previousBackup() throws -> Data {
-        let dir = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        return try Data(contentsOf: dir.appendingPathComponent("before-restore.json"))
+        return try Data(contentsOf: recoveryDirectory.appendingPathComponent("before-restore.json"))
     }
 }

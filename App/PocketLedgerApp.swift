@@ -15,7 +15,7 @@ extension Color {
         WindowGroup {
             Group {
                 if let store {
-                    RootView().environmentObject(store).task(id: receivedBackupURL) {
+                    RootView().environmentObject(store).defaultAppStorage(store.isDemonstration ? UserDefaults(suiteName: "com.localbookkeeping.demonstration")! : .standard).task(id: receivedBackupURL) {
                         if let url = receivedBackupURL { await store.stageBackup(url); receivedBackupURL = nil }
                     }
                 }
