@@ -85,11 +85,12 @@ public struct LedgerState: Codable, Equatable {
     public var entries: [Entry] = []
     public var loans: [Loan] = []
     public var budgets: [Budget] = []
+    public var archivedCategories: [String]? = []
     public var categories = ["餐饮", "交通", "购物", "居住", "娱乐", "医疗", "工资", "奖金", "其他"]
     public var settings: [String: String]? = [:]
     public var defaultBookID: UUID?
     public init() {}
-    enum CodingKeys: String, CodingKey { case books, accounts, transactions, entries, loans, budgets, categories, defaultBookID, settings, accountPostings }
+    enum CodingKeys: String, CodingKey { case books, accounts, transactions, entries, loans, budgets, categories, defaultBookID, settings, accountPostings, archivedCategories }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         books = try c.decode([Book].self, forKey: .books)
@@ -98,6 +99,7 @@ public struct LedgerState: Codable, Equatable {
         loans = try c.decode([Loan].self, forKey: .loans)
         budgets = try c.decode([Budget].self, forKey: .budgets)
         categories = try c.decode([String].self, forKey: .categories)
+        archivedCategories = try c.decodeIfPresent([String].self, forKey: .archivedCategories)
         defaultBookID = try c.decodeIfPresent(UUID.self, forKey: .defaultBookID)
         settings = try c.decodeIfPresent([String: String].self, forKey: .settings)
         if let declared = try c.decodeIfPresent([Posting].self, forKey: .accountPostings), declared != postings { throw LedgerError.invalid("资金过账与交易不一致") }
@@ -107,6 +109,7 @@ public struct LedgerState: Codable, Equatable {
         try c.encode(books, forKey: .books); try c.encode(accounts, forKey: .accounts)
         try c.encode(entries, forKey: .transactions); try c.encode(loans, forKey: .loans)
         try c.encode(budgets, forKey: .budgets); try c.encode(categories, forKey: .categories)
+        try c.encodeIfPresent(archivedCategories, forKey: .archivedCategories)
         try c.encodeIfPresent(defaultBookID, forKey: .defaultBookID); try c.encodeIfPresent(settings, forKey: .settings)
         try c.encode(postings, forKey: .accountPostings)
     }
@@ -145,6 +148,8 @@ public struct LedgerState: Codable, Equatable {
         try require(books.allSatisfy { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.name.count <= 60 }, "账本名称无效")
         try require(accounts.allSatisfy { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.name.count <= 60 && $0.opening >= -Money.limit && $0.opening <= Money.limit }, "账户无效")
         try require(categories.count <= 200 && Set(categories).count == categories.count && !categories.isEmpty && categories.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 40 }, "分类无效")
+        let allCategories = categories + (archivedCategories ?? [])
+        try require(allCategories.count <= 400 && Set(allCategories).count == allCategories.count, "分类重复或超过数量限制")
         let bookIDs = Set(books.map(\.id)), accountIDs = Set(accounts.map(\.id))
         let accountMap = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })
         let loanMap = Dictionary(uniqueKeysWithValues: loans.map { ($0.id, $0) })
@@ -153,6 +158,7 @@ public struct LedgerState: Codable, Equatable {
             try require(bookIDs.contains(e.bookID) && accountIDs.contains(e.accountID), "交易引用了不存在的账本或账户")
             try require((-62_135_596_800...253_402_300_799).contains(e.date.timeIntervalSince1970) && e.note.count <= 2000 && e.category.count <= 40, "交易日期或备注无效")
             try require(e.amount >= -Money.limit && e.amount <= Money.limit && (e.kind == .adjustment || e.amount > 0), "交易金额无效")
+            if e.kind == .expense || e.kind == .income { try require(allCategories.contains(e.category), "交易引用了不存在的分类") }
             if e.kind == .transfer || e.kind == .creditRepayment {
                 try require(e.targetID != e.accountID && e.targetID.map(accountIDs.contains) == true && e.loanID == nil, "转入转出账户必须不同且存在")
                             let source = accountMap[e.accountID]!

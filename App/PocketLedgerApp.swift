@@ -52,8 +52,8 @@ struct RootView: View {
                     if phase == .active { Button("解锁账本", action: unlock).buttonStyle(.borderedProminent).disabled(authenticating) }
                 }
             }
-        }.onChange(of: phase) { value in if value == .background { unlocked = false } }
-        .onChange(of: appLock) { _ in unlocked = false }
+        }.onChange(of: phase) { _, value in if value == .background { unlocked = false } }
+        .onChange(of: appLock) { unlocked = false }
     }
     var bottomBar: some View {
         HStack {

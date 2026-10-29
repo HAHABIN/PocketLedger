@@ -139,9 +139,15 @@ struct CategoriesView: View {
                 .onMove { offsets, destination in Task { await store.perform { $0.categories.move(fromOffsets: offsets, toOffset: destination) } } }
                 .onDelete { offsets in Task { await store.perform { s in
                     let names = offsets.map { s.categories[$0] }
-                    guard !s.entries.contains(where: { names.contains($0.category) && ($0.kind == .expense || $0.kind == .income) }) else { throw LedgerError.invalid("历史交易正在使用此分类，不能删除") }
+                    if s.archivedCategories == nil { s.archivedCategories = [] }
+                    for name in names where s.entries.contains(where: { $0.category == name && ($0.kind == .expense || $0.kind == .income) }) { s.archivedCategories?.append(name) }
                     s.categories.remove(atOffsets: offsets)
                 } } }
+            }
+            if let archived = store.state.archivedCategories, !archived.isEmpty {
+                Section("已停用 · 保留历史名称") {
+                    ForEach(archived, id: \.self) { item in Button("重新启用 " + item) { Task { await store.perform { s in s.archivedCategories?.removeAll { $0 == item }; s.categories.append(item) } } } }
+                }
             }
             Section("新增分类") { TextField("分类名称", text: $name); Button("添加") { Task { if await store.perform({ $0.categories.append(name.trimmingCharacters(in: .whitespacesAndNewlines)) }) { name = "" } } } }
         }.navigationTitle("分类管理").toolbar { EditButton() }

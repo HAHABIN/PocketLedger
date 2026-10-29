@@ -38,6 +38,12 @@ public final class SQLiteLedgerRepository: LedgerRepository, @unchecked Sendable
             }
             try db.execute(sql: "DROP TABLE ledger")
         }
+        migration.registerMigration("v3-account-order") { db in
+            // 兼容曾运行中间版本的数据库，补上账户排序列。
+            if try !db.columns(in: "accounts").contains(where: { $0.name == "sort_order" }) {
+                try db.execute(sql: "ALTER TABLE accounts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+            }
+        }
         try migration.migrate(queue)
     }
     public func load() throws -> LedgerState? {

@@ -39,7 +39,7 @@ struct EntryEditor: View {
                 if kind == .expense || kind == .income {
                     Section("分类") {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 65))], spacing: 12) {
-                            ForEach(store.state.categories, id: \.self) { item in
+                            ForEach(store.state.categories + ((existing != nil && !store.state.categories.contains(existing!.category) && (existing!.kind == .expense || existing!.kind == .income)) ? [existing!.category] : []), id: \.self) { item in
                                 Button { category = item } label: { VStack(spacing: 6) { Image(systemName: categoryIcon(item)).font(.title2); Text(item).font(.caption) }.frame(maxWidth: .infinity).frame(minHeight: 60).foregroundStyle(category == item ? Color.brand : Color.primary).background(category == item ? Color.brand.opacity(0.1) : Color.clear, in: RoundedRectangle(cornerRadius: 12)) }.buttonStyle(.plain)
                             }
                         }
@@ -66,7 +66,7 @@ struct EntryEditor: View {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { if baseline != fingerprint { discard = true } else { dismiss() } } }
                     ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完成") { amountFocused = false } }
                 }.onAppear(perform: load)
-                .onChange(of: kind) { _ in if !selectableAccounts.contains(where: { $0.id == account }) { account = selectableAccounts.first?.id }; target = nil }
+                .onChange(of: kind) { if existing == nil && loan == nil { if !selectableAccounts.contains(where: { $0.id == account }) { account = selectableAccounts.first?.id }; target = nil } }
                 .interactiveDismissDisabled(baseline != fingerprint)
                 .confirmationDialog("放弃未保存的修改？", isPresented: $discard, titleVisibility: .visible) { Button("放弃修改", role: .destructive) { dismiss() } }
         }
@@ -76,7 +76,7 @@ struct EntryEditor: View {
         kind = existing?.kind ?? (loan.map { $0.isLent ? .collect : .repay } ?? initialKind)
         book = existing?.bookID ?? store.bookID ?? store.state.defaultBookID
         account = existing?.accountID ?? initialAccount ?? selectableAccounts.first?.id
-        category = existing?.category ?? initialCategory
+        category = existing?.category ?? (store.state.categories.contains(initialCategory) ? initialCategory : store.state.categories.first ?? "其他")
         if let existing {
             amount = NSDecimalNumber(decimal: Decimal(existing.amount) / 100).stringValue
             target = existing.targetID; date = existing.date; note = existing.note
@@ -335,7 +335,12 @@ struct BookDetail: View {
             }
             Section("账本全部交易") { TransactionRows(entries: store.entries(book: id)) }
             Button("删除空账本", role: .destructive) { confirm = true }.disabled(id == store.state.defaultBookID)
-        }.navigationTitle("账本详情").onAppear { name = store.state.books.first { $0.id == id }?.name ?? "" }
+        }.navigationTitle("账本详情").onAppear { name = store.state.books.first { $0.id == id }?.name ?? ""; loadBudget() }
+            .onChange(of: date) { loadBudget() }
             .confirmationDialog("仅允许删除没有交易的非默认账本", isPresented: $confirm) { Button("删除", role: .destructive) { Task { if await store.perform({ s in guard !s.entries.contains(where: { $0.bookID == id }) else { throw LedgerError.invalid("账本存在交易，请归档保留历史数据") }; s.books.removeAll { $0.id == id }; s.budgets.removeAll { $0.bookID == id } }) { dismiss() } } } }
     }
+    func loadBudget() {
+        budget = store.state.budgets.first { $0.bookID == id && $0.month == LedgerState.month(date) }.map { NSDecimalNumber(decimal: Decimal($0.amount) / 100).stringValue } ?? ""
+    }
+
 }
